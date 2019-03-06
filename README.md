@@ -9,7 +9,7 @@ You can run this script in an interactive way, providing all parameters manually
 
 ### Prerequisites
 
-- **Powershell 5.0+:** Although Powershell is present in most of Windows machines, this script uses some Powershell 5.0 features, so be sure it is up to date.
+- **PowerShell 5.0+:** Although PowerShell is present in most of Windows machines, this script uses some PowerShell 5.0 features, so be sure it is up to date.
 - **[Helm 1.6](https://helm.sh/):** Should work with newer versions of Helm too but not tested yet.
 
 ### Executing (Interactive Mode)
@@ -25,7 +25,7 @@ Refer to [Helm] page for details on how to register a Helm Chart and then deploy
 
 ## Built With
 
-* [PowerShell] (https://github.com/PowerShell/PowerShell)
+* [PowerShell](https://github.com/PowerShell/PowerShell)
 * [Helm 1.6](https://helm.sh/)
 
 ## Authors
