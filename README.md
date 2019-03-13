@@ -34,6 +34,10 @@ You can run this script in an interactive way, providing all parameters manually
     | -port <port>          | Port number of the external endpoint of the serivce. If omitted, uses value in hosting.json
     | -readiness <settings> | Set readiness probe configuration in the format "<url>[,<delay>[,<timeout>[,<retries>]]]".
     | -liveness <settings>  | Set liveness probe configuration in the format "<url>[,<interval>[,<timeout>[,<retries>]]]".
+    | -maxcpu  <value>      | Limits CPU cores usage for the pod. Ex: 1.5 or 1500m limits usage to 1.5 cores.'
+    | -maxmem  <value>      | Limits memory usage for the pod, in bytes. Ex: 2147483648 = 2000Mi = 2Gi'
+    | -mincpu  <value>      | Require this free CPU to schedule pod in a node. This can avoid pod from being started.'
+    | -minmem  <value>      | Require this free memory to schedule pod in a node. This can avoid pod from being started.'
     | -f                    | Force the overwriting all files without confirmation.
     | -help                 | Shows command line parameters documentation.
     | -verbose, -v          | Show the content of all modified/created files.

@@ -6,6 +6,10 @@ param(
     [int16]  $port,         # Port number of the external endpoint of the serivce
     [string] $liveness,     # Configure liveness probe URL, timeout, retries and interval
     [string] $readiness,    # Configure readiness probe URL, timeout, retries and initial delay
+    [string] $maxcpu,       # Limits CPU usage for the pod
+    [string] $maxmem,       # Limits memory usage for the pod
+    [string] $mincpu,       # Require this free CPU to schedule pod in a node
+    [string] $minmem,       # Require this free memory to schedule pod in a node
 
     [alias("v")]
     [switch] $verbose,      # Outputs all created/modified files content
@@ -22,7 +26,7 @@ $ErrorActionPreference = "Stop"
 # Constants
 $jenkins_version    = "{JENKINS_VERSION}"
 $docker_registry    = "docker-registry.intern-belgianrail.be:9999"
-$docker_feed        = "ypto_docker"
+$docker_feed        = ""
 $proget_feed        = $docker_feed
 $kafka_group_suffix = '-k8s'
 $secret_db_user     = 'DB_USER'
@@ -33,11 +37,19 @@ $tag_db_user        = "{$secret_db_user}"
 $tag_db_pwd         = "{$secret_db_pwd}"
 $tag_connstr        = "User Id=$tag_db_user;Password=$tag_db_pwd"
 
+$f5_dns_dev_ip      = "10.251.149.21"
+$f5_dns_tst_ip      = "10.251.149.21"
+$f5_dns_acc_ip      = "10.251.149.22"
+$f5_dns_prd_ip      = "10.251.149.23"
+
 $default_port       = 80
 
-$unknown            = '"??????"'
+$unknown            = '??????'
 
 # Default values
+$dotnet_image = 'aspnetcore@sha256:5f964756fae50873c496915ad952b0f15df8ef985e4ac031d00b7ac0786162d0' #default
+$dotnet_version = '2.0'
+
 $probe_live_url     = '/info'
 $probe_live_period  = 10
 $probe_live_timeout = 5
@@ -51,7 +63,7 @@ $probe_ready_retries= 3
 # As soon as the changes are not needed anymore or they become permanent, it's easier to search
 # for it and locate the blocks to be modified or removed. Changing its value to 0 also easily
 # disable all those blocks at once.
-$xp_blocks          = (-not $stable)
+$xp_blocks          = $false #(-not $stable)
 
 
 
@@ -97,6 +109,10 @@ if ($help) # Sorry MS, but Get-Help method sucks...
     Write-Host '-f              Force the overwriting of all files without confirmation.'
     Write-Host '-readiness      Set readiness probe configuration in the format "<url>[,<delay>[,<timeout>[,<retries>]]]".'
     Write-Host '-liveness       Set liveness probe configuration in the format "<url>[,<interval>[,<timeout>[,<retries>]]]".'
+    Write-Host '-maxcpu         Limits CPU cores usage for the pod. Ex: 1.5 or 1500m limits usage to 1.5 cores.'
+    Write-Host '-maxmem         Limits memory usage for the pod, in bytes. Ex: 2147483648 = 2000Mi = 2Gi'
+    Write-Host '-mincpu         Require this free CPU to schedule pod in a node. This can avoid pod from being started.'
+    Write-Host '-minmem         Require this free memory to schedule pod in a node. This can avoid pod from being started.'
 
     Write-Host '-minikube       Prepare the application to deploy in local Kubernetes cluster (Minikube).'
     Write-Host '-verbose, -v    Show the content of all modified/created files.'
@@ -236,15 +252,19 @@ if ($null -eq $main_proj)
 
 
 # Check main project .NET Core version
-$dotnet_version = '@sha256:5f964756fae50873c496915ad952b0f15df8ef985e4ac031d00b7ac0786162d0' #default
-$publish_folder = '2.0'
 $content = $(Get-Content "csproj.shared.props" -Raw)
 if ($content -match "<TargetFramework>netcoreapp(.*?)<")
 {
-    if ($Matches[1] -ne '2.0')
+    if ($Matches[1] -ne $dotnet_version)
     {
-        $dotnet_version = ":$($Matches[1])-aspnetcore-runtime"
-        $publish_folder = $Matches[1]
+        $dotnet_version = $Matches[1]
+        if ($dotnet_version -le 2.0) {
+            $dotnet_image = "aspnetcore:"
+        }
+        else {
+            $dotnet_image = "dotnet:"
+        }
+        $dotnet_image += "$dotnet_version-aspnetcore-runtime"
     }
 }
 else
@@ -254,8 +274,13 @@ else
 }
 
 $docker_repo, $docker_img = $helm_project.Split('-')
-$docker_img_full = $docker_registry + '/' + $docker_feed + '/' + $docker_repo + '/' + $docker_img
-
+$docker_img_full = ''
+($docker_registry, $docker_feed, $docker_repo, $docker_img) | ForEach-Object {
+    if (-not [string]::IsNullOrEmpty($_)) {
+        $docker_img_full += $_.trim('/') + '/'
+    }
+}
+$docker_img_full = $docker_img_full.trim('/')
 
 # Check external endpoint port number
 if (-not $port)
@@ -359,7 +384,6 @@ if (!$liveness -and ((Read-Host -Prompt "Do you want to configure custom LIVENES
 
 
 
-
 #
 # Summary
 #
@@ -369,20 +393,24 @@ Write-Host ('During the process the name of all created/modified files will be p
             'Follow these steps to complete the configuration.')
 Write-Host ''
 
-Write-Host 'Helm Project:         ' -NoNewline
+Write-Host 'Helm Project:          ' -NoNewline
 Write-Host $helm_project -ForegroundColor Yellow
-Write-Host 'Solution File:        ' -NoNewline
+Write-Host 'Solution File:         ' -NoNewline
 Write-Host $solution.Name -ForegroundColor Yellow
-Write-Host 'Project File:         ' -NoNewline
+Write-Host 'Project File:          ' -NoNewline
 Write-Host $main_proj.Name -ForegroundColor Yellow
-Write-Host '.NET Core version:    ' -NoNewline
-Write-Host $publish_folder -ForegroundColor Yellow
-Write-Host 'Service Port:         ' -NoNewline
+Write-Host '.NET Core version:     ' -NoNewline
+Write-Host $dotnet_version -ForegroundColor Yellow
+Write-Host 'Service Port:          ' -NoNewline
 Write-Host $port -ForegroundColor Yellow
-Write-Host 'Readiness Probe:      ' -NoNewline
+Write-Host 'Readiness Probe:       ' -NoNewline
 Write-Host "+$probe_ready_url delay=${probe_ready_delay}s timeout=${probe_ready_timeout}s retries=${probe_ready_retries}" -ForegroundColor Yellow
-Write-Host 'Liveness Probe:       ' -NoNewline
+Write-Host 'Liveness Probe:        ' -NoNewline
 Write-Host "+$probe_live_url period=${probe_live_period}s timeout=${probe_live_timeout}s retries=${probe_live_retries}" -ForegroundColor Yellow
+Write-Host 'Resource Limits:       ' -NoNewline
+Write-Host "cpu=${maxcpu} memory=${maxmem}}" -ForegroundColor Yellow
+Write-Host 'Resource Requirements: ' -NoNewline
+Write-Host "cpu=${mincpu} memory=${minmem}}" -ForegroundColor Yellow
 
 if ($minikube) {
     Write-Host 'Image/Chart version:  ' -NoNewline
@@ -455,7 +483,7 @@ Set-Location $solution_dir > $null
 Write-Host '  - Configuring Helm files...'
 $file = "$helm_dir\Chart.yaml"
 $content = ((Get-Content $file) `
-    -replace '^description:.*',"description: Helm chart for $($solution.BaseName)" `
+    -replace '^description:.*',"description: Helm chart for $($solution.BaseName) service" `
     -replace '^version:.*',"version: $jenkins_version" -join "`r`n")
 
 $content | Set-Content $file -Encoding Default
@@ -481,6 +509,26 @@ if (!$minikube) {
     virtual-server.f5.com/http-port: "80"
     virtual-server.f5.com/partition: "K8s"' `
 		-replace 'hosts:[\s\S]*?local', 'hosts: []'
+}
+
+$resources = ""
+if ($maxcpu -or $maxmem) {
+    $maxcpu = if ($maxcpu) {"    cpu: `"$maxcpu`"`r`n"} else {""}
+    $maxmem = if ($maxmem) {"    memory: `"$maxmem`"`r`n"} else {""}
+
+    $resources += "  limits:`r`n" + $maxcpu + $maxmem
+}
+
+if ($mincpu -or $minmem) {
+    $mincpu = if ($mincpu) {"    cpu: `"$mincpu`"`r`n"} else {""}
+    $minmem = if ($minmem) {"    memory: `"$minmem`"`r`n"} else {""}
+
+    $resources += "  requests:`r`n" + $mincpu + $minmem
+}
+if ($resources) {
+    $resources = " resources:`r`n$resources`r`n"
+
+    $content = $content -replace 'resources: {}[\s\S]*?\n\n',$resources
 }
 
 $content | Set-Content $file  -Encoding Default
@@ -565,7 +613,7 @@ $content = $content -replace '(\s*)(readinessProbe:[\s\S]*?\1)(\w)', `
 
 # Set probes - Liveness
 $content = $content -replace '(\s*)(livenessProbe:[\s\S]*?\1)(\w)', `
-                            ('$1linenessProbe:' + `
+                            ('$1livenessProbe:' + `
                              '$1  httpGet:' + `
                              '$1    path: ' + $probe_live_url + `
                              '$1    port: http' + `
@@ -735,38 +783,51 @@ foreach($file in $files_found)
         if ($file.Name -match '\.(.*)\.json')
         {
             $file_env = $Matches[1]
-			$file_env_lower = $file_env.ToLower()
-			$file_env_lower_short = $file_env_lower.Substring(0,4) + "-"
-
-			if ($file_env_lower_short.StartsWith("t"))
-			{
-				$file_env_lower_short = $file_env_lower_short.Remove(1,1)
-			}
-			elseif ($file_env_lower_short.StartsWith("p"))
-			{
-				$file_env_lower_short = ""
-			}
-			else
-			{
-				$file_env_lower_short = $file_env_lower_short.Remove(3,1)
-			}
-
-			$ingress_host = $helm_project + "-k8s." + $file_env_lower_short + "intern-belgianrail.be"
+            $file_env_lower = $file_env.ToLower()
 
             $yaml = "$helm_dir\values.$($file_env).yaml"
 
+            switch ($file_env_lower) {
+                "acceptance"    {
+                    $ingress_host_ip = $f5_dns_acc_ip
+                    $env_code = "acc-"
+                }
+                "development"    {
+                    $ingress_host_ip = $f5_dns_dev_ip
+                    $env_code = "dev-"
+                }
+                "production"    {
+                    $ingress_host_ip = $f5_dns_prd_ip
+                    $env_code = ""
+                }
+                "test"    {
+                    $ingress_host_ip = $f5_dns_tst_ip
+                    $env_code = "tst-"
+                }
+                Default         {
+                    $unknown
+                }
+            }
+
+            if ($xp_blocks) {
+                $ingress_host_name = $helm_project + "-k8s." + $env_code + "intern-belgianrail.be"
+            }
+            else {
+                $ingress_host_name = "ri-" + $unknown + ".api." + $env_code + "intern-belgianrail.be"
+            }
+
             $content = ("data:`r`n" +
                         "  db:`r`n" +
-                        "    user: $unknown`r`n" +
-                        "    password: $unknown`r`n" +
+                        "    user: `"$unknown`"`r`n" +
+                        "    password: `"$unknown`"`r`n" +
                         "  file: `"external/$($file.Name)`"`r`n" +
                         "  environment: `"$file_env`"`r`n" +
-						"ingress:`r`n" +
-						"  namespace: rivdec-$file_env_lower`r`n" +
-						"  annotations: `r`n" +
-						"    virtual-server.f5.com/ip: `"10.251.149.21`"`r`n" +
-						"  hosts: `r`n" +
-						"    - $ingress_host`r`n")
+                        "ingress:`r`n" +
+                        "  namespace: rivdec-$file_env_lower`r`n" +
+                        "  annotations: `r`n" +
+                        "    virtual-server.f5.com/ip: `"$ingress_host_ip`"`r`n" +
+                        "  hosts: `r`n" +
+                        "    - $ingress_host_name`r`n")
 
             $content | Out-File $yaml  -Encoding Default
 
@@ -909,10 +970,10 @@ Write-Host 'DOCKER FILES  ------------------------------------------------------
 $file = $main_proj.Directory.FullName + '\dockerfile'
 Write-Host '  - Writing Docker file... ' -NoNewline
 
-$content = "FROM microsoft/aspnetcore$dotnet_version
+$content = "FROM microsoft/$dotnet_image
 WORKDIR /app
 EXPOSE $port
-COPY ./bin/Release/netcoreapp$publish_folder/publish .
+COPY ./bin/Release/publish .
 ENTRYPOINT [`"dotnet`", `"$($main_proj.BaseName).dll`"]"
 
 $content | Out-File $file -Encoding Default
