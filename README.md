@@ -10,7 +10,7 @@ You can run this script in an interactive way, providing all parameters manually
 ### Prerequisites
 
 - **PowerShell 5.0+:** Although PowerShell is present in most of Windows machines, this script uses some PowerShell 5.0 features, so be sure it is up to date.
-- **[Helm 1.6](https://helm.sh/):** Should work with newer versions of Helm too but not tested yet.
+- **Helm 1.6** Should work with newer versions of Helm too but not tested yet.
 
 ### Executing (Interactive Mode)
 
@@ -21,7 +21,12 @@ You can run this script in an interactive way, providing all parameters manually
 
 ## Deployment
 
-Refer to [Helm] page for details on how to register a Helm Chart and then deploy your application to Kubernetes.
+Refer to [Helm](https://helm.sh/) page for details on how to register a Helm Chart and then deploy your application to Kubernetes.
+
+## TODO
+
+- Make the script more "generic". Still contains lots of conventions that can/should be replaced by parameters.
+- Make a Bash version of the script to use it in other OS.
 
 ## Built With
 
@@ -30,7 +35,7 @@ Refer to [Helm] page for details on how to register a Helm Chart and then deploy
 
 ## Authors
 
-* **Ricardo A.** - [*Senior Software Engineer*](https://www.linkedin.com/in/ricardo-alkain/)
+* [**Ricardo A.**](https://www.linkedin.com/in/ricardo-alkain/) - *Senior Software Engineer*
 
 ## License
 
@@ -38,4 +43,5 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 ## Acknowledgments
 
-This script idea has born during a work for Belgian Rails company when we were faced with the need to create and modify Helm charts for dozens of microservices being migrated to their Kubernetes cluster. Another good example of laziness inspiring people XD
+This script idea has born during a work for Belgian Rails company. We were faced with the need to create and modify Helm charts for dozens of microservices being migrated to our Kubernetes cluster.
+Just another good example of laziness inspiring people XD

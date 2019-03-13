@@ -1,8 +1,9 @@
 param(
-    [string] $solution, # Solution file name. If omited the script needs to run in the solution folder.
-    [string] $project,  # .NET project file path. If omited the script prompts the user for it.
-    [strinh] $name,     # Helm project name. If omited the script prompts the user for it.
-    [switch] $debug     # Show the content of all modified/created files.
+    [string] $s,    # Solution file name. If omited the script needs to run in the solution folder.
+    [string] $p,    # Project file path. If omited the script prompts the user for it.
+    [string] $h,    # Helm project name. If omited the script prompts the user for it.
+    [switch] $f,    # Force the overwriting all files without confirmation
+    [switch] $debug # Show the content of all modified/created files.
 )
 
 set-executionpolicy remotesigned -s cu
@@ -18,7 +19,7 @@ $proget_feed = $docker_feed
 $secret_db_user = 'DB_USER'
 $secret_db_pwd = 'DB_PASSWORD'
 $env_db_user = "K8S_$secret_db_user"
-$env_db_pwd = "K8S_$secret_de_pwd"
+$env_db_pwd = "K8S_$secret_db_pwd"
 $tag_db_user = "{$secret_db_user}"
 $tag_db_pwd = "{$secret_db_pwd}"
 $tag_connstr = "User Id=$tag_db_user;Password=$tag_db_pwd"
@@ -29,34 +30,42 @@ $probe_ready = $probe_live
 $unknown = '"??????"'
 
 
-
+#
 # Validations
+#
 if ($debug) { Write-Host 'Running in DEBUG MODE!' -ForegroundColor DarkYellow }
 Write-Host ''
 
-if ($null -eq $solution)
+# Check if Helm is instaled
+if ((Get-Command "helm.exe" -ErrorAction SilentlyContinue) -eq $null)
 {
-    $solution = [System.IO.FileInfo] @(gci *.sln)[0]
-}
-else 
-{
-    $solution = [System.IO.FileInfo] (Get-ChildItem $solution)
+   Write-Host 'Helm is not properly installed on this machine: "helm.exe" not found in the system path.' -ForegroundColor Red
+   exit
 }
 
-if ($null -eq $solution)
+if ('' -eq $s)
 {
-    Write-Host 'Solution file not found. Run this script in a valid solution folder.' -ForegroundColor Red
-    exit
+    $solution = [System.IO.FileInfo] (@(Get-ChildItem *.sln)[0])
+
+    if ($null -eq $solution)
+    {
+        Write-Host 'Solution file not found. Run this script in a valid solution folder or use -s to specify a solution file.' -ForegroundColor Red
+        exit
+    }
+}
+else
+{
+    $solution = [System.IO.FileInfo] (Get-ChildItem $s)
+
+    if ($null -eq $solution)
+    {
+        Write-Host "Solution file '$solution' not found." -ForegroundColor Red
+        exit
+    }
 }
 
 $solution_dir = $solution.Directory.FullName
 cd $solution_dir
-
-if ((Get-Command "helm.exe" -ErrorAction SilentlyContinue) -eq $null)
-{ 
-   Write-Host 'Helm is not properly installed on this machine: "helm.exe" not found in the system path.' -ForegroundColor Red
-   exit
-}
 
 
 
@@ -68,33 +77,59 @@ if ((Get-Command "helm.exe" -ErrorAction SilentlyContinue) -eq $null)
 #
 Write-Host 'WELCOME!
 The solution ' -NoNewline
-Write-Host $solution.BaseName -ForegroundColor Yellow -NoNewline
+Write-Host $solution.BaseName -ForegroundColor Cyan -NoNewline
 Write-Host ' is about to be configured to deploy and run in the Kubernetes cluster.'
 Write-Host ('During the process all created/modified files will be printed. Please check the files before deploying. ' +
 'Moreover, as some settings depend on each application, a TODO list will be presented at the end. ' +
 'Follow these steps to complete the configuration.')
 Write-Host ''
 
-$helm_project = Read-Host "Please enter Helm project name. It's recommended to use the form <project>-<application> (e.g. rivdec-associations). This information will also be used to create the Docker image and configure Jenkins file`r`n"
+if ('' -eq $h)
+{
+    $helm_project = Read-Host "Please enter Helm project name. It's recommended to use the form <project>-<application> (e.g. rivdec-associations). This information will also be used to create the Docker image and configure Jenkins file`r`n"
+}
+else
+{
+    $helm_project = $h.ToLower()
+    Write-Host "Helm project name: " -NoNewline
+    Write-Host $helm_project -ForegroundColor Cyan
+}
 Write-Host ''
 
-# Select the entrypoint application
-Write-Host "Available projects:"
-$app_projects = @(gci *.csproj -Recurse)
-$i = 1
-foreach($proj in $app_projects)
+if ('' -eq $p)
 {
-    Write-Host '  ' $i ': ' -NoNewline -ForegroundColor Cyan
-    Write-Host $proj.BaseName
-    $i = $i + 1
+    # Select the entrypoint application
+    Write-Host "Available projects:"
+    $files_found = @(gci *.csproj -Recurse)
+
+    if ($files_found.Length -eq 0)
+    {
+        Write-Host "Folder $solution_dir does not have .csproj fies." -ForegroundColor Red
+        exit
+    }
+
+    $i = 1
+    foreach($proj in $files_found)
+    {
+        Write-Host '  ' $i ': ' -NoNewline -ForegroundColor Cyan
+        Write-Host $proj.BaseName
+        $i = $i + 1
+    }
+    echo ''
+    $i = Read-Host "Please choose the APPLICATION project"
+    $main_proj = [System.IO.FileInfo]$files_found[$i - 1]
+
 }
-echo ''
-$i = Read-Host "Please choose the APPLICATION project"
-$main_proj = [System.IO.FileInfo]$app_projects[$i - 1] 
+else
+{
+    $main_proj = [System.IO.FileInfo] (Get-ChildItem $p)
+    Write-Host 'Project to be configured: ' -NoNewline
+    Write-Host $($main_proj.Name) -ForegroundColor Cyan
+}
 
 if ($main_proj -eq $null)
 {
-    Write-Host 'Invalid option' -ForegroundColor Red
+    Write-Host 'Invalid option!' -ForegroundColor Red
     Exit
 }
 
@@ -113,13 +148,15 @@ if ($content -match "<TargetFramework>netcoreapp(.*?)<")
 }
 else
 {
-    Write-Error "$($main_proj.BaseName) does not seem to be a valid .NET Core project: expected <TargetFramework>netcoreappXXX</TargetFramework>." 
+    Write-Error "$($main_proj.BaseName) does not seem to be a valid .NET Core project: expected <TargetFramework>netcoreappXXX</TargetFramework>."
     Exit;
 }
 
 $docker_repo, $docker_img = $helm_project.Split('-')
 $docker_img_full = $docker_registry + '/' + $docker_feed + '/' + $docker_repo + '/' + $docker_img
 
+Write-Host '.NET Core version: ' -NoNewline
+Write-Host $publish_folder -ForegroundColor Cyan
 
 
 
@@ -127,16 +164,23 @@ $docker_img_full = $docker_registry + '/' + $docker_feed + '/' + $docker_repo + 
 # HELM
 #
 echo ''
-Write-Host 'PREPARING HELM  ---------------------------------------------------' -ForegroundColor Cyan
+Write-Host 'PREPARING HELM  -----------------------------------------------------------------------' -ForegroundColor Cyan
 
 # Create project
 if (Test-Path "$solution_dir\helm")
 {
-    Write-Host "  There's already a Helm project with this name in the Solution. If you continue all files will be ERASED and recreated." -ForegroundColor DarkYellow
-    $reply = Read-Host -Prompt "  Continue? [y/n]"
+    Write-Host "  There's already a Helm project with this name in the Solution. If you continue all files will be ERASED and recreated." -ForegroundColor Yellow
+    if ($f)
+    {
+        $overwrite = "y"
+    }
+    else
+    {
+        $overwrite = Read-Host -Prompt "  Continue? [y/n]"
+    }
     Write-Host ''
-    if ( $reply -match "[yY]" ) 
-    { 
+    if ( $overwrite -match "[yY]" )
+    {
         Write-Host '  Removing old Helm project... ' -NoNewline
         Remove-Item -path .\helm -Recurse > $null
         Write-Host 'Ok!' -ForegroundColor DarkGreen
@@ -216,12 +260,12 @@ $content = "$yaml_deploy_pre_res
           - name: ASPNETCORE_ENVIRONMENT
             value: {{ .Values.data.environment | quote }}
           - name: $env_db_user
-            valueFrom: 
+            valueFrom:
               secretKeyRef:
                 name: {{ template `"$helm_project.fullname`" . }}-secret
                 key: $secret_db_user
           - name: $env_db_pwd
-            valueFrom: 
+            valueFrom:
               secretKeyRef:
                 name: {{ template `"$helm_project.fullname`" . }}-secret
                 key: $secret_db_pwd
@@ -272,39 +316,14 @@ metadata:
 data:
   {{ (.Files.Glob `"external/appsettings.json`").AsConfig | indent 2 }}
   {{ (.Files.Glob .Values.data.file).AsConfig | indent 2 }}
-  {{ (.Files.Glob `"external/nlog.config`").AsConfig | indent 2 }}" 
-  
+  {{ (.Files.Glob `"external/nlog.config`").AsConfig | indent 2 }}"
+
 $content | Set-Content $file  -Encoding Default
 
 Write-Host "    : $file" -ForegroundColor DarkGreen
 if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 
 
-# Insert Helm folder into Solution as a WebSite
-# We dont need to check if folder already included. VS handles that automatically
-Write-Host '  - Including Helm folder into solution... ' -NoNewline
-
-$content = $(Get-Content $solution.FullName -Raw)
-
-if ($content.Contains('helm\'))
-{
-    Write-Host 'already updated!' -ForegroundColor DarkGray
-}
-else
-{
-    if ($content -match '([\s\S]*?)(Project\("[\s\S]*)')
-    {
-        $content = $Matches[1] + 
-        'Project("{E24C65DC-7377-472B-9ABA-BC803B73C61A}") = "helm", "helm\", "{2BE35EF5-677B-46E4-BB59-59762DAEF6E8}"' +
-        "`r`nEndProject`r`n" + 
-        $Matches[2] 
-    
-        $content | Set-Content ($solution.FullName) -Encoding Default
-    
-        Write-Host $($solution.FullName) -ForegroundColor DarkGreen
-        if ($debug) { Write-Host $content -ForegroundColor DarkGray }
-    }
-}
 
 
 
@@ -312,49 +331,68 @@ else
 # Setting files
 #
 echo ''
-Write-Host 'PREPARING APPLICATION SETTINGS  -----------------------------------' -ForegroundColor Cyan
+Write-Host 'PREPARING APPLICATION SETTINGS  -------------------------------------------------------' -ForegroundColor Cyan
 
 Write-Host '  - Creating application settings copies for Kubernetes:'
 
-foreach($file in @(gci "$($main_proj.Directory.FullName)\appsettings.*.json"))
+$files_found = @(gci "$($main_proj.Directory.FullName)\appsettings.*.json")
+
+$overwrite = 1
+
+if (-not $f)
+{
+    if ($files_found -match "kubernetes")
+    {
+        Write-Host "      There are already App Settings files prepared to Kubernetes in this project. " -ForegroundColor Yellow
+        $overwrite = (Read-Host -Prompt "      Do you want to overwrite them? [y/n]") -match "[yY]"
+    }
+}
+
+$replace_appsettings = 0
+foreach($file in $files_found)
 {
     if ($file.BaseName.Contains('kubernetes'))
     {
         $file_new = $file.FullName
+        $replace_appsettings = $overwrite
     }
     else
     {
         $file_new = $file.FullName.Replace(".json", ".kubernetes.json")
         Copy-Item $file.FullName -Destination $file_new > $null
+        $replace_appsettings = 1
     }
-    
-    # Insert User/Password into connection strings
-    $content = ((Get-Content $file_new -Raw) `
-        -replace 'User Id=[^";]*',"User Id=$tag_db_user
-    " `
-        -replace 'Password=[^";]*',"Password=$tag_db_pwd" `
-        -replace 'Integrated Security=true',$tag_connstr)
 
-    $content | Set-Content $file_new -Encoding Default
-    Write-Host "    : $file_new" -ForegroundColor DarkGreen
-    if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+    if ($replace_appsettings)
+    {
+        # Insert User/Password into connection strings
+        $content = ((Get-Content $file_new -Raw) `
+            -replace 'User Id=[^";]*',"User Id=$tag_db_user
+        " `
+            -replace 'Password=[^";]*',"Password=$tag_db_pwd" `
+            -replace 'Integrated Security=true',$tag_connstr)
 
-    # Creates additional values.yaml files
-    $content = $(Get-Content $file_new -Raw)
-    
+        $content | Set-Content $file_new -Encoding Default
+        Write-Host "    : $file_new" -ForegroundColor DarkGreen
+        if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+
+        # Creates additional values.yaml files
+        $content = $(Get-Content $file_new -Raw)
+    }
+
     if ($file.Name -match '\.(.*)\.json')
     {
         $file_env = $Matches[1]
 
         $yaml = "$helm_dir\values.$($file_env).yaml"
-        
+
         $content = "data:
   db:
     user: $unknown
     password: $unknown
-  file: `"external/$($file.FullName)`"
-  environment: `"$file_env`"" 
-    
+  file: `"external/$($file.Name)`"
+  environment: `"$file_env`""
+
         $content | Out-File $yaml  -Encoding Default
 
         Write-Host "    : $yaml" -ForegroundColor DarkGreen
@@ -371,7 +409,7 @@ foreach($file in @(gci "$($main_proj.Directory.FullName)\appsettings.*.json"))
 # SECRETS
 #
 echo ''
-Write-Host 'KUBERNETES SECRETS  -----------------------------------------------' -ForegroundColor Cyan
+Write-Host 'KUBERNETES SECRETS  -------------------------------------------------------------------' -ForegroundColor Cyan
 
 Write-Host '  - Creating secret file... ' -NoNewline
 $yaml = "$helm_dir\templates\secrets.yaml"
@@ -390,8 +428,8 @@ data:
   `"$secret_db_user`": |-
     {{ .Values.data.db.user | b64enc }}
   `"$secret_db_pwd`": |-
-    {{ .Values.data.db.password | b64enc }}" 
-    
+    {{ .Values.data.db.password | b64enc }}"
+
 $content | Out-File $yaml  -Encoding Default
 
 Write-Host $yaml -ForegroundColor DarkGreen
@@ -404,7 +442,7 @@ if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 # JENKINS
 #
 echo ''
-Write-Host 'JENKINS CONFIG  ---------------------------------------------------' -ForegroundColor Cyan
+Write-Host 'JENKINS CONFIG  -----------------------------------------------------------------------' -ForegroundColor Cyan
 
 $file = $solution_dir + '\Jenkinsfile'
 Write-Host '  - Modifying Jenkins file... ' -NoNewline
@@ -445,17 +483,15 @@ else
 # NLog
 #
 echo ''
-Write-Host 'PREPARING LOG CONFIG FOR CONTAINER' -ForegroundColor Cyan
-
-Write-Host '  - Creating NLog config for Docker... ' -NoNewline
+Write-Host 'PREPARING LOG CONFIG FOR CONTAINER ----------------------------------------------------' -ForegroundColor Cyan
 cd $main_proj.Directory.FullName > $null
-
-$file_new = ($main_proj.Directory.FullName + "\nlog.docker.config")
 
 Write-Host "  - Renaming Nlog.config to lower case (avoid problems on Linux containers)... " -NoNewline
 Rename-Item 'NLog.config' 'nlog.config' > $null
 Write-Host "OK" -ForegroundColor DarkGreen
 
+Write-Host '  - Creating NLog config for Docker... ' -NoNewline
+$file_new = ($main_proj.Directory.FullName + "\nlog.docker.config")
 $content = '<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       autoReload="true"
@@ -463,7 +499,7 @@ $content = '<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
       internalLogLevel="info"
       internalLogFile="internal-nlog.txt">
   <targets>
-    
+
     <target xsi:type="ColoredConsole" name="structuredLog">
       <layout xsi:type="JsonLayout" includeAllProperties="true">
         <attribute name="time" layout="${longdate:universalTime:true}" />
@@ -489,7 +525,7 @@ $content = '<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
     <logger name="Microsoft.EntityFrameworkCore.Database.*" minlevel="Info" writeTo="structuredLog" />
     <logger name="BelgianRail.RivDec.*" minlevel="Trace" writeTo="structuredLog" final="true" />
   </rules>
-</nlog>' 
+</nlog>'
 
 $content | Out-File $file_new  -Encoding Default
 
@@ -505,7 +541,7 @@ if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 # DOCKER
 #
 echo ''
-Write-Host 'DOCKER FILES  -----------------------------------------------------' -ForegroundColor Cyan
+Write-Host 'DOCKER FILES  -------------------------------------------------------------------------' -ForegroundColor Cyan
 
 # Docker file
 $file = $main_proj.Directory.FullName + '\dockerfile'
@@ -515,7 +551,7 @@ $content = "FROM microsoft/aspnetcore$dotnet_version
 WORKDIR /app
 EXPOSE 80
 COPY ./bin/Release/netcoreapp$publish_folder/publish .
-ENTRYPOINT [`"dotnet`", `"$($main_proj.BaseName).dll`"]" 
+ENTRYPOINT [`"dotnet`", `"$($main_proj.BaseName).dll`"]"
 
 $content | Out-File $file -Encoding Default
 
@@ -537,13 +573,104 @@ Write-Host $file -ForegroundColor DarkGreen
 if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 
 
+
+
+
+
+#
+# GIT
+#
+echo ''
+Write-Host 'GIT FILES  ----------------------------------------------------------------------------' -ForegroundColor Cyan
+
+# Docker file
+$file = $solution_dir + '\.gitignore'
+Write-Host '  - Writing Git Ignore file... ' -NoNewline
+
+$content = (Get-Content $file -Raw)
+if (-not ($content -match 'helm/\*\*'))
+{
+    Add-Content $file "
+helm/**/*.tgz
+helm/**/external/*" -Encoding Default
+}
+Write-Host 'OK' -ForegroundColor DarkGreen
+
+
+
+
+#
+# Solution and project
+#
+
+echo ''
+Write-Host 'UPDATING SOLUTION  --------------------------------------------------------------------' -ForegroundColor Cyan
+
+# Insert Helm folder into Solution as a WebSite
+# We dont need to check if folder already included. VS handles that automatically
+$file = $solution.FullName
+Write-Host '  - Including Helm folder into solution... ' -NoNewline
+
+$content = $(Get-Content $solution.FullName -Raw)
+
+if ($content.Contains('helm\'))
+{
+    Write-Host 'already updated!' -ForegroundColor DarkGray
+}
+else
+{
+    if ($content -match '([\s\S]*?)(Project\("[\s\S]*)')
+    {
+        $content = $Matches[1] +
+        'Project("{E24C65DC-7377-472B-9ABA-BC803B73C61A}") = "helm", "helm\", "{2BE35EF5-677B-46E4-BB59-59762DAEF6E8}' +
+        "`r`nEndProject`r`n" +
+        $Matches[2]
+    }
+
+    if ($content -match '([\s\S]*?GlobalSection\(ProjectConfigurationPlatforms\)\s=\spostSolution.*)([\s\S]*)')
+    {
+        $content = $Matches[1] +
+        "`t`t{2BE35EF5-677B-46E4-BB59-59762DAEF6E8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU`r`n" +
+        "`t`t{2BE35EF5-677B-46E4-BB59-59762DAEF6E8}.Release|Any CPU.ActiveCfg = Debug|Any CPU" +
+        $Matches[2]
+    }
+
+    $content | Set-Content ($solution.FullName) -Encoding UTF8
+
+    Write-Host $($solution.FullName) -ForegroundColor DarkGreen
+    if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+}
+
+
+# "
+# <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+# <Copy SourceFiles="$(ProjectDir)appsettings.json" DestinationFolder="$(SolutionDir)helm\rivdec-associations\external\" />
+# <Copy SourceFiles="$(ProjectDir)appsettings.Development.kubernetes.json" DestinationFiles="$(SolutionDir)helm\rivdec-associations\external\appsettings.Development.json" />
+# <Copy SourceFiles="$(ProjectDir)appsettings.Test.kubernetes.json" DestinationFiles="$(SolutionDir)helm\rivdec-associations\external\appsettings.Test.json" />
+# <Copy SourceFiles="$(ProjectDir)appsettings.Acceptance.kubernetes.json" DestinationFiles="$(SolutionDir)helm\rivdec-associations\external\appsettings.Acceptance.json" />
+# <Copy SourceFiles="$(ProjectDir)appsettings.Production.kubernetes.json" DestinationFiles="$(SolutionDir)helm\rivdec-associations\external\appsettings.Production.json" />
+# <Copy SourceFiles="$(ProjectDir)nlog.docker.config" DestinationFiles="$(SolutionDir)helm\rivdec-associations\external\nlog.config" />
+# </Target>"
+
+
+
+
+
+
 # Manual steps
 Write-Host ''
-Write-Host '  # TODO:' -ForegroundColor Yellow
+Write-Host ''
+Write-Host ''
+Write-Host 'TODO: MANUAL SETTINGS -----------------------------------------------------------------' -ForegroundColor Yellow
 Write-Host "    . Change descriptions in $helm_dir\Chart.yaml (optional)" -ForegroundColor Yellow
 Write-Host "    . Check if 'service.port' value in $helm_dir\values.yaml needs to be changed (default=80)" -ForegroundColor Yellow
 Write-Host "    . Set Database user name and password for each 'values.<environment>.yaml' file" -ForegroundColor Yellow
 Write-Host "    . Docker image will be created using .NET Core Runtime only. If you need an image with the sdk, then use microsoft/aspnetcore-build or dotnet:2.1-sdk. More info here https://github.com/aspnet/aspnet-docker/tree/master/2.1" -ForegroundColor Yellow
+Write-Host "    . Check if the option 'Build' is disabled for the Helm project in Visual Studio (menu Build -> Configuration Manager -> Release)"
+if (-not $replace_appsettings)
+{
+    Write-Host '    . Verify the content of all "appsettings.*.kubernetes.json" files to check if all configurations are correct and updated.'
+}
 
 
 
@@ -551,6 +678,10 @@ Write-Host ''
 Write-Host ''
 Write-Host 'OPERATION COMPLETED!' -ForegroundColor Green
 Write-Host 'Please, check all TODO items to fully configure this solution for Kubernetes.'
-Write-Host 'Have a nice day.' -ForegroundColor DarkGray
+Write-Host 'Have a nice day.'
 Write-Host ''
 cd $solution_dir
+
+<#
+
+#>
