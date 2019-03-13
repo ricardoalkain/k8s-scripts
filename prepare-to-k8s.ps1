@@ -6,7 +6,8 @@ param(
     [switch] $help,     # Displays quick help about the script
     [switch] $debug,    # Outputs all created/modified files content
     [switch] $stable,   # Disable all temporary/experimental changes
-    [int16]  $port      # Port number of the external endpoint of the serivce
+    [int16]  $port,     # Port number of the external endpoint of the serivce
+    [switch] $rollback  # TODO: Undo all modifications made by this script
 )
 
 set-executionpolicy remotesigned -s cu
@@ -166,7 +167,7 @@ if ('' -eq $p)
 {
     # Select the entrypoint application
     Write-Host "Available projects:"
-    $files_found = @(gci *.csproj -Recurse)
+    $files_found = @(Get-ChildItem *.csproj -Recurse)
 
     if ($files_found.Length -eq 0)
     {
@@ -181,7 +182,7 @@ if ('' -eq $p)
         Write-Host $proj.BaseName
         $op = $op + 1
     }
-    echo ''
+    Write-Output ''
     $op = Read-Host "Please choose the APPLICATION project"
     $main_proj = [System.IO.FileInfo]$files_found[$op - 1]
     Write-Host ''
@@ -332,7 +333,9 @@ Set-Location $solution_dir > $null
 # Configuring Chart.yaml
 Write-Host '  - Configuring Helm files...'
 $file = "$helm_dir\Chart.yaml"
-$content = ((Get-Content $file) -replace '^version:.*',"version: $jenkins_version" -join "`r`n")
+$content = ((Get-Content $file) `
+    -replace '^description:.*',"description: Helm chart for $($solution.BaseName)" `
+    -replace '^version:.*',"version: $jenkins_version" -join "`r`n")
 
 $content | Set-Content $file -Encoding Default
 
@@ -346,6 +349,7 @@ $content = (Get-Content $file -Raw) `
     -replace '  tag: stable',"  tag: $jenkins_version" `
     -replace '  repository:.*',"  repository: $docker_img_full" `
     -replace '  type: ClusterIP','  type: LoadBalancer' `
+    -replace '  port: 80',"  port: $port" `
     -replace 'replicaCount: 1','replicaCount: 2' `
 
 $content | Set-Content $file  -Encoding Default
@@ -415,6 +419,7 @@ $yaml_deploy_pos_res
 
 # Set probes
 $content = $content `
+    -replace '(ports:[\s\S]*?containerPort:\s*?).*',$('$1';$port) `
     -replace '(livenessProbe:\s*?httpGet:\s*?path:\s*?).*',$('$1';$probe_live) `
     -replace '(readinessProbe:\s*?httpGet:\s*?path:\s*?).*',$('$1';$probe_ready)
 
@@ -493,54 +498,49 @@ foreach($file in $files_found)
     $file_new = $file.FullName.Replace(".json", ".kubernetes.json")
     Copy-Item $file.FullName -Destination $file_new > $null
 
-    # Insert User/Password into connection strings
-    $content = ((Get-Content $file_new -Raw) `
-        -replace 'User Id=[^";]*',"User Id=$tag_db_user" `
-        -replace 'Password=[^";]*',"Password=$tag_db_pwd" `
-        -replace 'Integrated Security=true',$tag_connstr `
-        -replace '(CorsOrigins.*?)\[(.*?)\]', '$1[]' `
-        -replace "(Kafka[\s\S]*?GroupId.*:.*?`")(.*?(?<!$kafka_group_suffix))(`")", "`$1`$2$kafka_group_suffix`$3"
-    )
+    $content = (Get-Content $file_new -Raw)
 
     if ($xp_blocks)
     {
         # Rename Kafka topics to avoid conflicts
         $json = ($content| ConvertFrom-Json)
-        Write-Host "1" -ForegroundColor Red
 
         if ($json.BackgroundServices)
         {
-            Write-Host "2" -ForegroundColor Red
             foreach($section in $json.BackgroundServices)
             {
-                Write-Host "3" -ForegroundColor Red
                 $section.psobject.Properties | ForEach-Object {
                    if (($_.Name -ne 'Reference') -and ($_.Name -ne 'RealTime'))
                    {
-                        Write-Host "4" -ForegroundColor Red
                         $_.Value.psobject.Properties | ForEach-Object {
-                            Write-Host "5" -ForegroundColor Red
-                            $name = $_.Name
+                           $name = $_.Name
                            $value = [string] $_.Value
                            if ($name.Contains('TopicName') -and (-not $value.StartsWith('k8s_')))
                            {
-                                Write-Host "6" -ForegroundColor Red
-                                $_.Value = 'k8s_' + $value
+                               # Replace the original content to minimize changes in the settings file. (ConverTo-Json reformats the file)
+                               $content = ($content -ireplace "([\s,{]`"?$name`"?\s*:\s*?`")($value`")",'$1k8s_$2')
                            }
                        }
                    }
                }
             }
-
-            $content = ($json | ConvertTo-Json -Depth 20)
         }
 
         # Suffix cache databases with _K8S
         $content = ($content -replace '(".*?Database=)(.*?cache)','$1$2_K8S')
 
         # Invalidate TrainMap URLs
-        $content = ($content -replace '(".*?trainmap.*?"\s?:\s?"http.*)(azure\.)(.*?")','xxxxx')
+        $content = ($content -replace '(".*?trainmap.*?"\s?:\s?"http.*)(azure\.)(.*?")','$1xxxxx$3')
     }
+
+    # Insert User/Password into connection strings
+    $content = ($content `
+        -replace '(User Id|uid)=[^";]*',"User Id=$tag_db_user" `
+        -replace '(Password|pwd)=[^";]*',"Password=$tag_db_pwd" `
+        -replace '(Trusted_Connection|Integrated Security)=\w+',$tag_connstr `
+        -replace '(CorsOrigins.*?)\[(.*?)\]', '$1[]' `
+        -replace "(Kafka[\s\S]*?GroupId.*:.*?`")(.*?(?<!$kafka_group_suffix))(`")", "`$1`$2$kafka_group_suffix`$3" `
+    )
 
     $content | Set-Content $file_new -Encoding Default
     Write-Host "    : $file_new" -ForegroundColor DarkGreen
@@ -580,7 +580,7 @@ foreach($file in $files_found)
 #
 # SECRETS
 #
-echo ''
+Write-Output ''
 Write-Host 'KUBERNETES SECRETS  -------------------------------------------------------------------' -ForegroundColor Cyan
 
 Write-Host '  - Creating secret file... ' -NoNewline
@@ -613,7 +613,7 @@ if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 #
 # JENKINS
 #
-echo ''
+Write-Output ''
 Write-Host 'JENKINS CONFIG  -----------------------------------------------------------------------' -ForegroundColor Cyan
 
 $file = $solution_dir + '\Jenkinsfile'
@@ -631,15 +631,15 @@ else
         -replace '(package.*\s+)(import)', "`$1import be.belgianrail.jenkins.jobs.DockerPublishOptions`r`n`$2") `
         -replace 'options.publishToNuget = true', 'options.publishToNuget = false' `
         -replace '(new MicroservicesJob[\s\S]*)', "def dockerPublishOptions = new DockerPublishOptions()
-    dockerPublishOptions.dockerFeed = '$proget_feed'
-    dockerPublishOptions.dockerRepository = '$docker_repo'
-    dockerPublishOptions.dockerImageName = '$docker_img'
-    dockerPublishOptions.dockerFileLocation = '$($main_proj.Directory.Name)'
+dockerPublishOptions.dockerFeed = '$proget_feed'
+dockerPublishOptions.dockerRepository = '$docker_repo'
+dockerPublishOptions.dockerImageName = '$docker_img'
+dockerPublishOptions.dockerFileLocation = '$($main_proj.Directory.Name)'
 
-    options.dockerPublishOptions = dockerPublishOptions
-    options.helmChartName = '$helm_project'
+options.dockerPublishOptions = dockerPublishOptions
+options.helmChartName = '$helm_project'
 
-    `$1"
+`$1"
 
     $content | Out-File $file  -Encoding Default
 
@@ -654,9 +654,9 @@ else
 #
 # NLog
 #
-echo ''
+Write-Output ''
 Write-Host 'PREPARING LOG CONFIG FOR CONTAINER ----------------------------------------------------' -ForegroundColor Cyan
-cd $main_proj.Directory.FullName > $null
+Set-Location $main_proj.Directory.FullName > $null
 
 Write-Host "  - Renaming Nlog.config to lower case (avoid problems on Linux containers)... " -NoNewline
 Rename-Item 'NLog.config' 'nlog.config' > $null
@@ -714,7 +714,7 @@ $postbuild_copies["nlog.docker.config"] = "nlog.config"
 #
 # DOCKER
 #
-echo ''
+Write-Output ''
 Write-Host 'DOCKER FILES  -------------------------------------------------------------------------' -ForegroundColor Cyan
 
 # Docker file
@@ -723,7 +723,7 @@ Write-Host '  - Writing Docker file... ' -NoNewline
 
 $content = "FROM microsoft/aspnetcore$dotnet_version
 WORKDIR /app
-EXPOSE 80
+EXPOSE $port
 COPY ./bin/Release/netcoreapp$publish_folder/publish .
 ENTRYPOINT [`"dotnet`", `"$($main_proj.BaseName).dll`"]"
 
@@ -738,7 +738,7 @@ Write-Host '  - Writing Ignore file... ' -NoNewline
 
 $content = "**/appsettings.json
 **/appsettings.*.json
-**/hosting.json
+**/hosting.*.json
 **/nlog*.config"
 
 $content | Out-File $file -Encoding Default
@@ -754,7 +754,7 @@ if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 #
 # GIT
 #
-echo ''
+Write-Output ''
 Write-Host 'GIT FILES  ----------------------------------------------------------------------------' -ForegroundColor Cyan
 
 # Docker file
@@ -777,7 +777,7 @@ Write-Host 'OK' -ForegroundColor DarkGreen
 # Solution and project
 #
 
-echo ''
+Write-Output ''
 Write-Host 'UPDATING SOLUTION  --------------------------------------------------------------------' -ForegroundColor Cyan
 
 # Insert Helm folder into Solution as a WebSite
@@ -903,7 +903,7 @@ Write-Host 'OPERATION COMPLETED!' -ForegroundColor Green
 Write-Host 'Please, check all TODO items to fully configure this solution for Kubernetes.'
 Write-Host 'Have a nice day.'
 Write-Host ''
-cd $solution_dir
+Set-Location $solution_dir
 
 <#
 
