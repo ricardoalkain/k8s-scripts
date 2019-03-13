@@ -238,7 +238,7 @@ if ($null -eq $main_proj)
 # Check main project .NET Core version
 $dotnet_version = '@sha256:5f964756fae50873c496915ad952b0f15df8ef985e4ac031d00b7ac0786162d0' #default
 $publish_folder = '2.0'
-$content = $(Get-Content $main_proj.FullName -Raw)
+$content = $(Get-Content "csproj.shared.props" -Raw)
 if ($content -match "<TargetFramework>netcoreapp(.*?)<")
 {
     if ($Matches[1] -ne '2.0')
