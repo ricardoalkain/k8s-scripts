@@ -899,6 +899,9 @@ if (-not $target_node)
     $attr = $content.CreateAttribute('AfterTargets')
     $attr.Value = "PostBuildEvent"
     $target_node.Attributes.Append($attr) > $null
+	$attr = $content.CreateAttribute('Condition')
+	$attr.Value = "$" + "(SolutionDir) != '*Undefined*'"
+	$target_node.Attributes.Append($attr) > $null
     $content.Project.AppendChild($target_node) > $null
 }
 
