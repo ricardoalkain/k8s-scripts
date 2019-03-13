@@ -26,17 +26,19 @@ You can run this script in an interactive way, providing all parameters manually
 
 #### Parameters
 
-    | Param         | Description
-    | ------        | ------------
-    | -s <path>     | Solution file name. If omited the script needs to run in the solution folder.
-    | -p <path>     | Project file path. If omited the script prompts the user for it.
-    | -h <name>     | Helm project name. If omited the script prompts the user for it.
-    | -port <port>  | Port number of the external endpoint of the serivce. If omitted, uses value in hosting.json
-    | -f            | Force the overwriting all files without confirmation.
-    | -help         | Shows command line parameters documentation.
-    | -verbose, -v  | Show the content of all modified/created files.
-    | -stable       | Disable experimental/unstable changes.
-    | -minikube     | Prepare the application to deploy in a local Kubernetes cluster (Minikube).
+    | Param                 | Description
+    | ------                | ------------
+    | -s <path>             | Solution file name. If omited the script needs to run in the solution folder.
+    | -p <path>             | Project file path. If omited the script prompts the user for it.
+    | -h <name>             | Helm project name. If omited the script prompts the user for it.
+    | -port <port>          | Port number of the external endpoint of the serivce. If omitted, uses value in hosting.json
+    | -readiness <settings> | Set readiness probe configuration in the format "<url>[,<delay>[,<timeout>[,<retries>]]]".
+    | -liveness <settings>  | Set liveness probe configuration in the format "<url>[,<interval>[,<timeout>[,<retries>]]]".
+    | -f                    | Force the overwriting all files without confirmation.
+    | -help                 | Shows command line parameters documentation.
+    | -verbose, -v          | Show the content of all modified/created files.
+    | -stable               | Disable experimental/unstable changes.
+    | -minikube             | Prepare the application to deploy in a local Kubernetes cluster (Minikube).
 
 ## Deployment
 
@@ -63,5 +65,6 @@ Just another good example of laziness inspiring people XD
 ### TODO
 
 - Make the script more "generic". Still contains lots of conventions that can/should be configurable by parameters.
+- Option to fully disable interactive mode when running from command line (automatically choose default values)
 - Make a Bash version of the script to use it in other OS.
 - Option to rollback changes made by the script.

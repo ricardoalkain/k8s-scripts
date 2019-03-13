@@ -1,13 +1,17 @@
 param(
-    [string] $s,        # Solution path
-    [string] $p,        # Main application project path
-    [string] $h,        # Helm project/chart path
-    [switch] $f,        # Overwrites files without confirmation (force)
-    [switch] $help,     # Displays quick help about the script
-    [switch] $verbose,  # Outputs all created/modified files content
-    [switch] $stable,   # Disable all temporary/experimental changes
-    [int16]  $port,     # Port number of the external endpoint of the serivce
-    [switch] $minikube  # Configure solution to run on Minikube instead of K8s Cluster
+    [string] $s,            # Solution path
+    [string] $p,            # Main application project path
+    [string] $h,            # Helm project/chart path
+    [switch] $f,            # Overwrites files without confirmation (force)
+    [int16]  $port,         # Port number of the external endpoint of the serivce
+    [string] $liveness,     # Configure liveness probe URL, timeout, retries and interval
+    [string] $readiness,    # Configure readiness probe URL, timeout, retries and initial delay
+
+    [alias("v")]
+    [switch] $verbose,      # Outputs all created/modified files content
+    [switch] $help,         # Displays quick help about the script
+    [switch] $stable,       # Disable all temporary/experimental changes
+    [switch] $minikube      # Configure solution to run on Minikube instead of K8s Cluster
 )
 
 set-executionpolicy remotesigned -s cu
@@ -30,16 +34,18 @@ $tag_db_pwd         = "{$secret_db_pwd}"
 $tag_connstr        = "User Id=$tag_db_user;Password=$tag_db_pwd"
 
 $default_port       = 80
-$probe_live         = '/hc'
-$probe_live_timeout = 1
-$probe_live_period  = 10
-$probe_live_retries = 3
-$probe_ready        = '/hc'
-$probe_ready_timeout= 10
-$probe_ready_delay  = 5
-$probe_ready_retries= 3
 
 $unknown            = '"??????"'
+
+# Default values
+$probe_live_url     = '/info'
+$probe_live_period  = 10
+$probe_live_timeout = 5
+$probe_live_retries = 3
+$probe_ready_url    = '/hc'
+$probe_ready_delay  = 10
+$probe_ready_timeout= 10
+$probe_ready_retries= 3
 
 # The const bellow is used to highlight temporary/experimental blocks in conversion script
 # As soon as the changes are not needed anymore or they become permanent, it's easier to search
@@ -47,6 +53,25 @@ $unknown            = '"??????"'
 # disable all those blocks at once.
 $xp_blocks          = (-not $stable)
 
+
+
+if ($liveness) {
+    $liveness = $liveness.Split(',')
+    $i = $liveness.GetUpperBound(0)
+    $probe_live_url = $liveness[0]
+    if ($i -gt 0) { $probe_live_period  = $liveness[1] }
+    if ($i -gt 1) { $probe_live_timeout = $liveness[2] }
+    if ($i -gt 2) { $probe_live_retries = $liveness[3] }
+}
+
+if ($readiness) {
+    $readiness = $readiness.Split(',')
+    $i = $readiness.GetUpperBound(0)
+    $probe_ready_url = $readiness[0]
+    if ($i -gt 0) { $probe_ready_delay   = $readiness[1] }
+    if ($i -gt 1) { $probe_ready_timeout = $readiness[2] }
+    if ($i -gt 2) { $probe_ready_retries = $readiness[3] }
+}
 
 
 
@@ -70,6 +95,9 @@ if ($help) # Sorry MS, but Get-Help method sucks...
     Write-Host '-h <name>       Helm project name. If omited the script prompts the user for it.'
     Write-Host '-port           Port number of the external endpoint of the serivce. If omitted, uses value in "hosting.json"'
     Write-Host '-f              Force the overwriting of all files without confirmation.'
+    Write-Host '-readiness      Set readiness probe configuration in the format "<url>[,<delay>[,<timeout>[,<retries>]]]".'
+    Write-Host '-liveness       Set liveness probe configuration in the format "<url>[,<interval>[,<timeout>[,<retries>]]]".'
+
     Write-Host '-minikube       Prepare the application to deploy in local Kubernetes cluster (Minikube).'
     Write-Host '-verbose, -v    Show the content of all modified/created files.'
     Write-Host '-stable         Disable all temporary/experimental changes made by the script'
@@ -153,7 +181,7 @@ if ('' -eq $h)
     $op = Read-Host "Helm Project"
     Write-Host ''
 
-    if ($op -ne '')
+    if ($op)
     {
         $helm_project = $op.ToLower()
     }
@@ -273,6 +301,62 @@ if ($minikube) {
     Write-Host ''
 }
 
+# Configure READINESS probe
+if (!$readiness -and ((Read-Host -Prompt "Do you want to configure custom READINESS probe settings? [y/n]") -match '[yY]'))
+{
+    Write-Host ''
+
+    Write-Host 'Inform the URL used for readiness check ' -NoNewline
+    Write-Host "[press Enter to use default '$probe_ready_url']" -NoNewline -ForegroundColor DarkGray
+    $op = Read-Host ' '
+    if ($op) { $probe_ready_url = $op }
+
+    Write-Host 'Inform the initial delay (seconds) before checking for readiness ' -NoNewline
+    Write-Host "[press Enter to use default $probe_ready_delay]" -NoNewline -ForegroundColor DarkGray
+    $op = Read-Host ' '
+    if ($op) { $probe_ready_delay = [int]$op }
+
+    Write-Host 'Inform a timeout (seconds) to wait for a response ' -NoNewline
+    Write-Host "[press Enter to use default $probe_ready_timeout]" -NoNewline -ForegroundColor DarkGray
+    $op = Read-Host ' '
+    if ($op) { $probe_ready_timeout = [int]$op }
+
+    Write-Host 'Inform the number of times the probe will try to check for readiness ' -NoNewline
+    Write-Host "[press Enter to use default $probe_ready_retries]" -NoNewline -ForegroundColor DarkGray
+    $op = Read-Host ' '
+    if ($op) { $probe_ready_retries = [int]$op }
+
+    Write-Host ''
+}
+
+# Configure LIVENESS probe
+if (!$liveness -and ((Read-Host -Prompt "Do you want to configure custom LIVENESS probe settings? [y/n]") -match '[yY]'))
+{
+    Write-Host ''
+
+    Write-Host 'Inform the URL used for liveness check ' -NoNewline
+    Write-Host "[press Enter to use default '$probe_live_url_url']" -NoNewline -ForegroundColor DarkGray
+    $op = Read-Host ' '
+    if ($op) { $probe_live_url = $op }
+
+    Write-Host 'Inform the interval (seconds) between each liveness checking ' -NoNewline
+    Write-Host "[press Enter to use default $probe_live_period]" -NoNewline -ForegroundColor DarkGray
+    $op = Read-Host ' '
+    if ($op) { $probe_live_period = [int]$op }
+
+    Write-Host 'Inform a timeout (seconds) to wait for a response ' -NoNewline
+    Write-Host "[press Enter to use default $probe_live_timeout]" -NoNewline -ForegroundColor DarkGray
+    $op = Read-Host ' '
+    if ($op) { $probe_live_timeout = [int]$op }
+
+    Write-Host 'Inform the number of times the probe will try to check for liveness ' -NoNewline
+    Write-Host "[press Enter to use default $probe_live_retries]" -NoNewline -ForegroundColor DarkGray
+    $op = Read-Host ' '
+    if ($op) { $probe_live_retries = [int]$op }
+
+    Write-Host ''
+}
+
 
 
 
@@ -283,6 +367,8 @@ Write-Host 'The solution is about to be configured to deploy and run in the Kube
 Write-Host ('During the process the name of all created/modified files will be printed. Please check the files before deploying. ' +
             'Moreover, as some settings depend on each application, a TODO list will be presented at the end. ' +
             'Follow these steps to complete the configuration.')
+Write-Host ''
+
 Write-Host 'Helm Project:         ' -NoNewline
 Write-Host $helm_project -ForegroundColor Yellow
 Write-Host 'Solution File:        ' -NoNewline
@@ -293,6 +379,11 @@ Write-Host '.NET Core version:    ' -NoNewline
 Write-Host $publish_folder -ForegroundColor Yellow
 Write-Host 'Service Port:         ' -NoNewline
 Write-Host $port -ForegroundColor Yellow
+Write-Host 'Readiness Probe:      ' -NoNewline
+Write-Host "+$probe_ready_url delay=${probe_ready_delay}s timeout=${probe_ready_timeout}s retries=${probe_ready_retries}" -ForegroundColor Yellow
+Write-Host 'Liveness Probe:       ' -NoNewline
+Write-Host "+$probe_live_url period=${probe_live_period}s timeout=${probe_live_timeout}s retries=${probe_live_retries}" -ForegroundColor Yellow
+
 if ($minikube) {
     Write-Host 'Image/Chart version:  ' -NoNewline
     Write-Host $port -ForegroundColor Yellow
@@ -309,7 +400,7 @@ if ($op -match '[^yY]')
 }
 Write-Host ''
 
-
+return
 
 
 
@@ -466,7 +557,7 @@ if ($content -match '(\s*)(readinessProbe:[\s\S]*?\1)\w')
 {
     $content = '$`readinessProbe:' + `
                '$1  httpGet:' + `
-               '$1    path: ' + $probe_ready + `
+               '$1    path: ' + $probe_ready_url + `
                '$1    port: http' + `
                '$1  timeoutSeconds: ' + $probe_ready_timeout + `
                '$1  initialDelaySeconds: ' + $probe_ready_delay + `
@@ -479,7 +570,7 @@ if ($content -match '(\s*)(livenessProbe:[\s\S]*?\1)\w')
 {
     $content = '$`linenessProbe:' + `
                '$1  httpGet:' + `
-               '$1    path: ' + $probe_live + `
+               '$1    path: ' + $probe_live_url + `
                '$1    port: http' + `
                '$1  timeoutSeconds: ' + $probe_live_timeout + `
                '$1  periodSeconds: ' + $probe_live_period + `
