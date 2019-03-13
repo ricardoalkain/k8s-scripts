@@ -70,8 +70,6 @@ cd $solution_dir
 
 
 
-
-
 #
 # Get script data
 #
@@ -160,6 +158,11 @@ Write-Host $publish_folder -ForegroundColor Cyan
 
 
 
+
+
+
+
+
 #
 # HELM
 #
@@ -169,7 +172,7 @@ Write-Host 'PREPARING HELM  ----------------------------------------------------
 # Create project
 if (Test-Path "$solution_dir\helm")
 {
-    Write-Host "  There's already a Helm project with this name in the Solution. If you continue all files will be ERASED and recreated." -ForegroundColor Yellow
+    Write-Host "  There's already a Helm project with this name in the Solution. All files will be ERASED and recreated." -ForegroundColor Yellow
     if ($f)
     {
         $overwrite = "y"
@@ -348,7 +351,7 @@ if (-not $f)
     }
 }
 
-$postbuild_copy = @{
+$postbuild_copies = @{
     "appsettings.json" = ""
 }
 
@@ -371,8 +374,7 @@ foreach($file in $files_found)
     {
         # Insert User/Password into connection strings
         $content = ((Get-Content $file_new -Raw) `
-            -replace 'User Id=[^";]*',"User Id=$tag_db_user
-        " `
+            -replace 'User Id=[^";]*',"User Id=$tag_db_user" `
             -replace 'Password=[^";]*',"Password=$tag_db_pwd" `
             -replace 'Integrated Security=true',$tag_connstr)
 
@@ -384,7 +386,7 @@ foreach($file in $files_found)
         $content = $(Get-Content $file_new -Raw)
     }
 
-    $postbuild_copy[$file.Name] = (Split-Path $file_new -Leaf)
+    $postbuild_copies[(Split-Path $file_new -Leaf)] = $file.Name
 
     if ($file.Name -match '\.(.*)\.json')
     {
@@ -538,7 +540,7 @@ $content | Out-File $file_new  -Encoding Default
 Write-Host $file_new -ForegroundColor DarkGreen
 if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 
-$postbuild_copy["nlog.docker.config"] = "nlog.config"
+$postbuild_copies["nlog.docker.config"] = "nlog.config"
 
 
 
@@ -619,7 +621,7 @@ Write-Host 'UPDATING SOLUTION  -------------------------------------------------
 $file = $solution.FullName
 Write-Host '  - Including Helm folder into solution... ' -NoNewline
 
-$content = $(Get-Content $solution.FullName -Raw)
+$content = $(Get-Content $file -Raw)
 
 if ($content.Contains('helm\'))
 {
@@ -649,16 +651,56 @@ else
     if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 }
 
+$file = $main_proj.FullName
+Write-Host '  - Post Build Events: Copy files to Helm folder'
 
-# "
-# <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-# <Copy SourceFiles="$(ProjectDir)appsettings.json" DestinationFolder="$(SolutionDir)helm\rivdec-associations\external\" />
-# <Copy SourceFiles="$(ProjectDir)appsettings.Development.kubernetes.json" DestinationFiles="$(SolutionDir)helm\rivdec-associations\external\appsettings.Development.json" />
-# <Copy SourceFiles="$(ProjectDir)appsettings.Test.kubernetes.json" DestinationFiles="$(SolutionDir)helm\rivdec-associations\external\appsettings.Test.json" />
-# <Copy SourceFiles="$(ProjectDir)appsettings.Acceptance.kubernetes.json" DestinationFiles="$(SolutionDir)helm\rivdec-associations\external\appsettings.Acceptance.json" />
-# <Copy SourceFiles="$(ProjectDir)appsettings.Production.kubernetes.json" DestinationFiles="$(SolutionDir)helm\rivdec-associations\external\appsettings.Production.json" />
-# <Copy SourceFiles="$(ProjectDir)nlog.docker.config" DestinationFiles="$(SolutionDir)helm\rivdec-associations\external\nlog.config" />
-# </Target>"
+# It's safer to work on csproj as XML so we preserve any previous Port Build events
+# without the risk of duplicating the tags
+$content = New-Object XML
+$content.Load($file) > $null
+
+$target_node = $content.SelectSingleNode('Project/Target[@Name="PostBuild" and @AfterTargets="PostBuildEvent"]')
+
+if (-not $target_node)
+{
+    $target_node = $content.CreateElement('Target')
+    $attr = $content.CreateAttribute('Name')
+    $attr.Value = "PostBuild"
+    $target_node.Attributes.Append($attr) > $null
+    $attr = $content.CreateAttribute('AfterTargets')
+    $attr.Value = "PostBuildEvent"
+    $target_node.Attributes.Append($attr) > $null
+    $content.Project.AppendChild($target_node) > $null
+}
+
+ForEach($source in $postbuild_copies.Keys)
+{
+    $target = $postbuild_copies[$source]
+
+    $node = $content.CreateElement('Copy')
+    $attr = $content.CreateAttribute('SourceFiles')
+    $attr.Value = '$(ProjectDir)' + $source
+    $node.Attributes.Append($attr) > $null
+    if ($target -eq '')
+    {
+        $attr = $content.CreateAttribute('DestinationFolder')
+    }
+    else
+    {
+        $attr = $content.CreateAttribute('DestinationFiles')
+    }
+    $attr.Value = '$(SolutionDir)' + "helm\$helm_project\external\$target"
+    $node.Attributes.Append($attr) > $null
+    $target_node.AppendChild($node) > $null
+    Write-Host "    : COPY $source => ..\helm\$helm_project\external\$target" -ForegroundColor DarkGreen
+}
+
+$content.Save($file)
+if ($debug)
+{
+    $content = (Get-Content $file -Raw)
+    Write-Host $content -ForegroundColor DarkGray
+}
 
 
 
