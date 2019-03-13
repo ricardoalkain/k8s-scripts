@@ -348,6 +348,10 @@ if (-not $f)
     }
 }
 
+$postbuild_copy = @{
+    "appsettings.json" = ""
+}
+
 $replace_appsettings = 0
 foreach($file in $files_found)
 {
@@ -379,6 +383,8 @@ foreach($file in $files_found)
         # Creates additional values.yaml files
         $content = $(Get-Content $file_new -Raw)
     }
+
+    $postbuild_copy[$file.Name] = (Split-Path $file_new -Leaf)
 
     if ($file.Name -match '\.(.*)\.json')
     {
@@ -531,6 +537,8 @@ $content | Out-File $file_new  -Encoding Default
 
 Write-Host $file_new -ForegroundColor DarkGreen
 if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+
+$postbuild_copy["nlog.docker.config"] = "nlog.config"
 
 
 

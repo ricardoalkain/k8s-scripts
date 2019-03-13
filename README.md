@@ -26,11 +26,13 @@ You can run this script in an interactive way, providing all parameters manually
 
 #### Parameters
 
-    |-s     | Solution file name. If omited the script needs to run in the solution folder. |
-    |-p     | Project file path. If omited the script prompts the user for it.              |
-    |-h     | Helm project name. If omited the script prompts the user for it.              |
-    |-f     | Force the overwriting all files without confirmation.                         |
-    |-debug | Show the content of all modified/created files.                               |
+    | Param   | Description
+    | ------- | -----------
+    | -s      | Solution file name. If omited the script needs to run in the solution folder.
+    | -p      | Project file path. If omited the script prompts the user for it.
+    | -h      | Helm project name. If omited the script prompts the user for it.
+    | -f      | Force the overwriting all files without confirmation.
+    | -debug  | Show the content of all modified/created files.
 
 ## Deployment
 
