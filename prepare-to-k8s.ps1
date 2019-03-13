@@ -27,8 +27,11 @@ $ErrorActionPreference = "Stop"
 
 
 # Constants
-$jenkins_version    = "{JENKINS_VERSION}"
-$docker_registry    = "docker-registry.intern-belgianrail.be:9999"
+$base_namespace     = 'MyDomain.MyNamespace'
+$mainproj_suffix    = 'Api'
+$jenkins_version    = "{JENKINS_VERSION}"               # CHANGE HERE!
+$jenkins_namespace  = 'com.mydomain.jenkins.jobs'       # CHANGE HERE!
+$docker_registry    = "docker-registry.mydomain:port"   # CHANGE HERE!
 $docker_feed        = ""
 $kafka_group_suffix = '-k8s'
 $secret_db_user     = 'DB_USER'
@@ -39,10 +42,10 @@ $tag_db_user        = "{$secret_db_user}"
 $tag_db_pwd         = "{$secret_db_pwd}"
 $tag_connstr        = "User Id=$tag_db_user;Password=$tag_db_pwd"
 
-$dns_dev_ip      = "10.251.149.21"
-$dns_tst_ip      = "10.251.149.21"
-$dns_acc_ip      = "10.251.149.22"
-$dns_prd_ip      = "10.251.149.23"
+$dns_dev_ip      = "10.251.149.21"  # CHANGE HERE!
+$dns_tst_ip      = "10.251.149.21"  # CHANGE HERE!
+$dns_acc_ip      = "10.251.149.22"  # CHANGE HERE!
+$dns_prd_ip      = "10.251.149.23"  # CHANGE HERE!
 
 $f5_dev_part     = "K8s"
 $f5_tst_part     = "K8s"
@@ -54,7 +57,7 @@ $default_port       = 80
 $unknown            = '??????'
 
 # Default values
-$dotnet_image = 'aspnetcore@sha256:5f964756fae50873c496915ad952b0f15df8ef985e4ac031d00b7ac0786162d0' #default
+$dotnet_image = 'aspnetcore@sha256:5f964756fae50873c496915ad952b0f15df8ef985e4ac031d00b7ac0786162d0' #default (netcore 2.0)
 
 $probe_live_url     = '/info'
 $probe_live_period  = 10
@@ -65,9 +68,9 @@ $probe_ready_delay  = 10
 $probe_ready_timeout= 10
 $probe_ready_retries= 3
 
-$ext_url_template   = "ri-{ALIAS}.api.{ENV}-intern-belgianrail.be"
+$ext_url_template   = "svc-{ALIAS}.api.{ENV}-mydomain.com"  # CHANGE HERE!
 
-if (!$certificate) { $certificate = "/Common/clientssl" }
+if (!$certificate) { $certificate = "/Common/clientssl" }   # CHANGE HERE!
 
 # The const bellow is used to highlight temporary/experimental blocks in conversion script
 # As soon as the changes are not needed anymore or they become permanent, it's easier to search
@@ -528,7 +531,7 @@ Set-Location $solution_dir > $null
 # Configuring Chart.yaml
 Write-Host '  - Configuring Helm files...'
 $file = "$helm_dir\Chart.yaml"
-$tmp = ($solution.BaseName -replace 'BelgianRail.RivDec.','') -replace '.Api',''
+$tmp = ($solution.BaseName -replace "$base_namespace.",'') -replace ".$mainproj_suffix",''  # PROBABLY CHAGE HERE TOO
 $content = ((Get-Content $file) `
     -replace '^description:.*',"description: Helm chart for the RIVDEC $tmp microservice" `
     -replace '^version:.*',"version: $jenkins_version" -join "`r`n")
@@ -569,7 +572,7 @@ if (!$minikube) {
 }
 
 if (!$http) {
-    $content = $content -replace 'tls:[\s\S]*?\n\n', (
+    $content = $content -replace '  tls:[\s\S]*?\n\n', (
     "  tls:`r`n" + `
     "    - secretName: `"$certificate`"`r`n" +
     "  #    hosts: []`r`n`r`n")
@@ -879,7 +882,7 @@ foreach($file in $files_found)
             }
 
             if ($xp_blocks) {
-                $ingress_host_name = $helm_project + "-k8s." + $env_code + "intern-belgianrail.be"
+                $ingress_host_name = $helm_project + "-k8s." + $env_code + "mydomain.com"   # CHANGE HERE!
             }
             else {
                 $ingress_host_name = ($ext_url_template -replace '{ENV}',$env_code) -replace '\.-','.'
@@ -948,14 +951,14 @@ Write-Host '  - Modifying Jenkins file... ' -NoNewline
 
 $content = (Get-Content $file -Raw)
 
-if ($content.Contains('import be.belgianrail.jenkins.jobs.DockerPublishOptions'))
+if ($content.Contains("import $jenkins_namespace.DockerPublishOptions"))  # CHANGE HERE!
 {
     Write-Host 'already updated!' -ForegroundColor DarkGray
 }
 else
 {
     $content = ($content `
-        -replace '(package.*\s+)(import)', "`$1import be.belgianrail.jenkins.jobs.DockerPublishOptions`r`n`$2") `
+        -replace '(package.*\s+)(import)', "`$1import $jenkins_namespace.DockerPublishOptions`r`n`$2") ` # CHANGE HERE!
         -replace '(new MicroservicesJob[\s\S]*)', "def dockerPublishOptions = new DockerPublishOptions()
 dockerPublishOptions.dockerRepository = '$docker_repo'
 dockerPublishOptions.dockerImageName = '$docker_img'
@@ -1018,7 +1021,7 @@ $content = '<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
     <!--Skip Microsoft logs and so log only own logs-->
     <logger name="Microsoft.*" minlevel="Warn" writeTo="structuredLog" />
     <logger name="Microsoft.EntityFrameworkCore.Database.*" minlevel="Info" writeTo="structuredLog" />
-    <logger name="BelgianRail.RivDec.*" minlevel="Trace" writeTo="structuredLog" final="true" />
+    <logger name="' + $base_namespace + '.*" minlevel="Trace" writeTo="structuredLog" final="true" />
   </rules>
 </nlog>'
 

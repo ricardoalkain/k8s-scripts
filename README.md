@@ -4,8 +4,11 @@ Powershell script to automate configuration of a .NET Core project to be deploye
 
 ## Getting Started
 
-Just download the latest version and run it!
-You can run this script in an interactive way, providing all parameters manually, or provide the parameters in the command line and execute with no intervention (i.e. directly from a CI/CD pipeline)
+- Just download the latest version.
+- Check all consts defined in the script and change the ones necessary to your environment(s) (URLs, IP addresses, default values...)
+- Run it!
+
+**Note:** You can run this script in an interactive way, providing all parameters manually, or provide the parameters in the command line and execute with no intervention (i.e. directly from a CI/CD pipeline)
 
 ### Prerequisites
 
