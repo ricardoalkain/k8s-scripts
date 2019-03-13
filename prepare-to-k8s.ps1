@@ -93,7 +93,7 @@ if ($help) # Sorry MS, but Get-Help method sucks...
     Write-Host '-s <path>       Solution file path. If omited the script needs to run in the solution folder.'
     Write-Host '-p <path>       Project file path. If omited the script prompts the user for it.'
     Write-Host '-h <name>       Helm project name. If omited the script prompts the user for it.'
-    Write-Host '-port           Port number of the external endpoint of the serivce. If omitted, uses value in "hosting.json"'
+    Write-Host '-port           Port number of the external endpoint of the service. If omitted, uses value in "hosting.json"'
     Write-Host '-f              Force the overwriting of all files without confirmation.'
     Write-Host '-readiness      Set readiness probe configuration in the format "<url>[,<delay>[,<timeout>[,<retries>]]]".'
     Write-Host '-liveness       Set liveness probe configuration in the format "<url>[,<interval>[,<timeout>[,<retries>]]]".'
@@ -335,7 +335,7 @@ if (!$liveness -and ((Read-Host -Prompt "Do you want to configure custom LIVENES
     Write-Host ''
 
     Write-Host 'Inform the URL used for liveness check ' -NoNewline
-    Write-Host "[press Enter to use default '$probe_live_url_url']" -NoNewline -ForegroundColor DarkGray
+    Write-Host "[press Enter to use default '$probe_live_url']" -NoNewline -ForegroundColor DarkGray
     $op = Read-Host ' '
     if ($op) { $probe_live_url = $op }
 
@@ -400,7 +400,6 @@ if ($op -match '[^yY]')
 }
 Write-Host ''
 
-return
 
 
 
@@ -553,30 +552,27 @@ $yaml_deploy_pos_res
 $content = $content -replace '(ports:[\s\S]*?containerPort:\s*?).*',$('$1','{{ .Values.service.port }}')
 
 # Set probes - Readiness
-if ($content -match '(\s*)(readinessProbe:[\s\S]*?\1)\w')
-{
-    $content = '$`readinessProbe:' + `
-               '$1  httpGet:' + `
-               '$1    path: ' + $probe_ready_url + `
-               '$1    port: http' + `
-               '$1  timeoutSeconds: ' + $probe_ready_timeout + `
-               '$1  initialDelaySeconds: ' + $probe_ready_delay + `
-               '$1  failureThreshold: ' + $probe_ready_retries + `
-               '$'''
-}
+$content = $content -replace '(\s*)(readinessProbe:[\s\S]*?\1)(\w)', `
+                                ('$1readinessProbe:' + `
+                                 '$1  httpGet:' + `
+                                 '$1    path: ' + $probe_ready_url + `
+                                 '$1    port: http' + `
+                                 '$1  timeoutSeconds: ' + $probe_ready_timeout + `
+                                 '$1  initialDelaySeconds: ' + $probe_ready_delay + `
+                                 '$1  failureThreshold: ' + $probe_ready_retries + `
+                                 '$1$3')
+#}
 
 # Set probes - Liveness
-if ($content -match '(\s*)(livenessProbe:[\s\S]*?\1)\w')
-{
-    $content = '$`linenessProbe:' + `
-               '$1  httpGet:' + `
-               '$1    path: ' + $probe_live_url + `
-               '$1    port: http' + `
-               '$1  timeoutSeconds: ' + $probe_live_timeout + `
-               '$1  periodSeconds: ' + $probe_live_period + `
-               '$1  failureThreshold: ' + $probe_live_retries + `
-               '$'''
-}
+$content = $content -replace '(\s*)(livenessProbe:[\s\S]*?\1)(\w)', `
+                            ('$1linenessProbe:' + `
+                             '$1  httpGet:' + `
+                             '$1    path: ' + $probe_live_url + `
+                             '$1    port: http' + `
+                             '$1  timeoutSeconds: ' + $probe_live_timeout + `
+                             '$1  periodSeconds: ' + $probe_live_period + `
+                             '$1  failureThreshold: ' + $probe_live_retries + `
+                             '$1$3')
 
 $content | Set-Content $file  -Encoding Default
 
