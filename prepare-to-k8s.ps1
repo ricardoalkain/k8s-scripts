@@ -47,7 +47,7 @@ $xp_blocks          = (-not $stable)
 Write-Host ''
 Write-Host ''
 Write-Host ''
-Write-Host 'Automated Configuration Script for Kubernetes deploy' -ForegroundColor White
+Write-Host 'Automated Configuration Script for Kubernetes deploy' -ForegroundColor Cyan
 Write-Host ''
 
 if ($help) # Sorry MS, but Get-Help method sucks...
@@ -534,12 +534,17 @@ foreach($file in $files_found)
     }
 
     # Insert User/Password into connection strings
+    # Clears CORS origins (irrelevant inside K8s cluster)
+    # Suffix Kafka groups with "k8s"
+    # Disable log output to anything but StructuredLog output
     $content = ($content `
         -replace '(User Id|uid)=[^";]*',"User Id=$tag_db_user" `
         -replace '(Password|pwd)=[^";]*',"Password=$tag_db_pwd" `
         -replace '(Trusted_Connection|Integrated Security)=\w+',$tag_connstr `
         -replace '(CorsOrigins.*?)\[(.*?)\]', '$1[]' `
         -replace "(Kafka[\s\S]*?GroupId.*:.*?`")(.*?(?<!$kafka_group_suffix))(`")", "`$1`$2$kafka_group_suffix`$3" `
+        -replace '("?Logging"?\s*:\s*{([\s\S])*?"?Console"?\s?:\s?{[\s\S]*?"?LogLevel"?\s*:\s*{\s*"?Default"?\s*:\s*")\w*"','$1None"' `
+        -replace '("?Logging"?\s*:\s*{([\s\S])*?"?Debug"?\s?:\s?{[\s\S]*?"?LogLevel"?\s*:\s*{\s*"?Default"?\s*:\s*")\w*"','$1None"' `
     )
 
     $content | Set-Content $file_new -Encoding Default
