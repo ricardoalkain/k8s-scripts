@@ -709,7 +709,6 @@ else
 {
     $content = ($content `
         -replace '(package.*\s+)(import)', "`$1import be.belgianrail.jenkins.jobs.DockerPublishOptions`r`n`$2") `
-        -replace 'options.publishToNuget = true', 'options.publishToNuget = false' `
         -replace '(new MicroservicesJob[\s\S]*)', "def dockerPublishOptions = new DockerPublishOptions()
 dockerPublishOptions.dockerFeed = '$proget_feed'
 dockerPublishOptions.dockerRepository = '$docker_repo'
@@ -753,8 +752,6 @@ $content = '<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
         <attribute name="time" layout="${longdate:universalTime:true}" />
         <attribute name="level" layout="${level:upperCase=true}" />
         <attribute name="logger" layout="${logger}" />
-        <attribute name="kafkaTag" layout="${mdlc:item=KafkaTag}"/>
-        <attribute name="keyTag" layout="${mdlc:item=KeyTag}"/>
         <attribute name="message" layout="${message}" />
         <attribute name="exception" layout="${exception:format=tostring}" />
         <attribute name="aspRequestMethod" layout="${aspnet-request-method}" />
@@ -895,15 +892,19 @@ $target_node = $content.SelectSingleNode('Project/Target[@Name="PostBuild" and @
 if (-not $target_node)
 {
     $target_node = $content.CreateElement('Target')
+
     $attr = $content.CreateAttribute('Name')
     $attr.Value = "PostBuild"
     $target_node.Attributes.Append($attr) > $null
+
     $attr = $content.CreateAttribute('AfterTargets')
     $attr.Value = "PostBuildEvent"
     $target_node.Attributes.Append($attr) > $null
-	$attr = $content.CreateAttribute('Condition')
-	$attr.Value = "$" + "(SolutionDir) != '*Undefined*'"
-	$target_node.Attributes.Append($attr) > $null
+
+    $attr = $content.CreateAttribute('Condition')
+    $attr.Value = "`$(SolutionDir) != '*Undefined*'"
+    $target_node.Attributes.Append($attr) > $null
+
     $content.Project.AppendChild($target_node) > $null
 }
 
