@@ -10,6 +10,7 @@ param(
     [string] $maxmem,       # Limits memory usage for the pod
     [string] $mincpu,       # Require this free CPU to schedule pod in a node
     [string] $minmem,       # Require this free memory to schedule pod in a node
+    [string] $url,          # External URL template
 
     [alias("v")]
     [switch] $verbose,      # Outputs all created/modified files content
@@ -37,10 +38,10 @@ $tag_db_user        = "{$secret_db_user}"
 $tag_db_pwd         = "{$secret_db_pwd}"
 $tag_connstr        = "User Id=$tag_db_user;Password=$tag_db_pwd"
 
-$f5_dns_dev_ip      = "10.251.149.21"
-$f5_dns_tst_ip      = "10.251.149.21"
-$f5_dns_acc_ip      = "10.251.149.22"
-$f5_dns_prd_ip      = "10.251.149.23"
+$dns_dev_ip      = "10.251.149.21"
+$dns_tst_ip      = "10.251.149.21"
+$dns_acc_ip      = "10.251.149.22"
+$dns_prd_ip      = "10.251.149.23"
 
 $default_port       = 80
 
@@ -58,6 +59,8 @@ $probe_ready_url    = '/hc'
 $probe_ready_delay  = 10
 $probe_ready_timeout= 10
 $probe_ready_retries= 3
+
+$ext_url_template   = "ri-{ALIAS}.api.{ENV}-intern-belgianrail.be"
 
 # The const bellow is used to highlight temporary/experimental blocks in conversion script
 # As soon as the changes are not needed anymore or they become permanent, it's easier to search
@@ -113,11 +116,12 @@ if ($help) # Sorry MS, but Get-Help method sucks...
     Write-Host '-maxmem         Limits memory usage for the pod, in bytes. Ex: 2147483648 = 2000Mi = 2Gi'
     Write-Host '-mincpu         Require this free CPU to schedule pod in a node. This can avoid pod from being started.'
     Write-Host '-minmem         Require this free memory to schedule pod in a node. This can avoid pod from being started.'
+    Write-Host "-url, -u        External URL. Inform service alias only of full URL with {ENV} as placeholder for environment code. Ex: $ext_url_template"
 
     Write-Host '-minikube       Prepare the application to deploy in local Kubernetes cluster (Minikube).'
     Write-Host '-verbose, -v    Show the content of all modified/created files.'
     Write-Host '-stable         Disable all temporary/experimental changes made by the script'
-    Write-Host '-help           Prints info about the script anf list of parameters.'
+    Write-Host '-help, -h       Prints info about the script anf list of parameters.'
     Write-Host ''
 
     exit
@@ -326,56 +330,77 @@ if ($minikube) {
     Write-Host ''
 }
 
-# Configure READINESS probe
-if (!$readiness -and ((Read-Host -Prompt "Do you want to configure custom READINESS probe settings? [y/n]") -match '[yY]'))
+# Configure external URL (load balancer)
+if (!$url) {
+    Write-Host 'Inform service alias or the full URL for external load balancer. For full URL, use {ENV} as placeholder for environment code.'
+    Write-Host "[press Enter to use default '$ext_url_template']" -NoNewline -ForegroundColor DarkGray
+    $op = Read-Host ' '
+    if ($op) { $url = $op }
+    Write-Host ''
+}
+
+if ($url) {
+    if ($url.EndsWith('.be')) {     # full URL template
+        $ext_url_template = $url
+    }
+
+    else {      # Only alias
+        $ext_url_template = ($ext_url_template -replace '{ALIAS}',$url)
+    }
+}
+else {
+    $ext_url_template = ($ext_url_template -replace '{ALIAS}',$unknown)
+}
+
+# Configure READINESS and LIVENESS probe
+if (!$readiness -and ((Read-Host -Prompt "Do you want to configure probe settings? [y/n]") -match '[yY]'))
 {
     Write-Host ''
+    Write-Host 'REDINESS PROBE:' -ForegroundColor Yellow
+    Write-Host ''
 
-    Write-Host 'Inform the URL used for readiness check ' -NoNewline
-    Write-Host "[press Enter to use default '$probe_ready_url']" -NoNewline -ForegroundColor DarkGray
+    Write-Host '  Inform the URL used for readiness check ' -NoNewline
+    Write-Host "  [press Enter to use default '$probe_ready_url']" -NoNewline -ForegroundColor DarkGray
     $op = Read-Host ' '
     if ($op) { $probe_ready_url = $op }
 
-    Write-Host 'Inform the initial delay (seconds) before checking for readiness ' -NoNewline
-    Write-Host "[press Enter to use default $probe_ready_delay]" -NoNewline -ForegroundColor DarkGray
+    Write-Host '  Inform the initial delay (seconds) before checking for readiness ' -NoNewline
+    Write-Host "  [press Enter to use default $probe_ready_delay]" -NoNewline -ForegroundColor DarkGray
     $op = Read-Host ' '
     if ($op) { $probe_ready_delay = [int]$op }
 
-    Write-Host 'Inform a timeout (seconds) to wait for a response ' -NoNewline
-    Write-Host "[press Enter to use default $probe_ready_timeout]" -NoNewline -ForegroundColor DarkGray
+    Write-Host '  Inform a timeout (seconds) to wait for a response ' -NoNewline
+    Write-Host "  [press Enter to use default $probe_ready_timeout]" -NoNewline -ForegroundColor DarkGray
     $op = Read-Host ' '
     if ($op) { $probe_ready_timeout = [int]$op }
 
-    Write-Host 'Inform the number of times the probe will try to check for readiness ' -NoNewline
-    Write-Host "[press Enter to use default $probe_ready_retries]" -NoNewline -ForegroundColor DarkGray
+    Write-Host '  Inform the number of times the probe will try to check for readiness ' -NoNewline
+    Write-Host "  [press Enter to use default $probe_ready_retries]" -NoNewline -ForegroundColor DarkGray
     $op = Read-Host ' '
     if ($op) { $probe_ready_retries = [int]$op }
 
     Write-Host ''
-}
-
-# Configure LIVENESS probe
-if (!$liveness -and ((Read-Host -Prompt "Do you want to configure custom LIVENESS probe settings? [y/n]") -match '[yY]'))
-{
+    Write-Host ''
+    Write-Host 'LIVENESS PROBE:' -ForegroundColor Yellow
     Write-Host ''
 
-    Write-Host 'Inform the URL used for liveness check ' -NoNewline
-    Write-Host "[press Enter to use default '$probe_live_url']" -NoNewline -ForegroundColor DarkGray
+    Write-Host '  Inform the URL used for liveness check ' -NoNewline
+    Write-Host "  [press Enter to use default '$probe_live_url']" -NoNewline -ForegroundColor DarkGray
     $op = Read-Host ' '
     if ($op) { $probe_live_url = $op }
 
-    Write-Host 'Inform the interval (seconds) between each liveness checking ' -NoNewline
-    Write-Host "[press Enter to use default $probe_live_period]" -NoNewline -ForegroundColor DarkGray
+    Write-Host '  Inform the interval (seconds) between each liveness checking ' -NoNewline
+    Write-Host "  [press Enter to use default $probe_live_period]" -NoNewline -ForegroundColor DarkGray
     $op = Read-Host ' '
     if ($op) { $probe_live_period = [int]$op }
 
-    Write-Host 'Inform a timeout (seconds) to wait for a response ' -NoNewline
-    Write-Host "[press Enter to use default $probe_live_timeout]" -NoNewline -ForegroundColor DarkGray
+    Write-Host '  Inform a timeout (seconds) to wait for a response ' -NoNewline
+    Write-Host "  [press Enter to use default $probe_live_timeout]" -NoNewline -ForegroundColor DarkGray
     $op = Read-Host ' '
     if ($op) { $probe_live_timeout = [int]$op }
 
-    Write-Host 'Inform the number of times the probe will try to check for liveness ' -NoNewline
-    Write-Host "[press Enter to use default $probe_live_retries]" -NoNewline -ForegroundColor DarkGray
+    Write-Host '  Inform the number of times the probe will try to check for liveness ' -NoNewline
+    Write-Host "  [press Enter to use default $probe_live_retries]" -NoNewline -ForegroundColor DarkGray
     $op = Read-Host ' '
     if ($op) { $probe_live_retries = [int]$op }
 
@@ -387,6 +412,7 @@ if (!$liveness -and ((Read-Host -Prompt "Do you want to configure custom LIVENES
 #
 # Summary
 #
+Write-Host ''
 Write-Host 'The solution is about to be configured to deploy and run in the Kubernetes cluster.'
 Write-Host ('During the process the name of all created/modified files will be printed. Please check the files before deploying. ' +
             'Moreover, as some settings depend on each application, a TODO list will be presented at the end. ' +
@@ -411,6 +437,8 @@ Write-Host 'Resource Limits:       ' -NoNewline
 Write-Host "cpu=${maxcpu} memory=${maxmem}}" -ForegroundColor Yellow
 Write-Host 'Resource Requirements: ' -NoNewline
 Write-Host "cpu=${mincpu} memory=${minmem}}" -ForegroundColor Yellow
+Write-Host 'External URL:          ' -NoNewline
+Write-Host $ext_url_template -ForegroundColor Yellow
 
 if ($minikube) {
     Write-Host 'Image/Chart version:  ' -NoNewline
@@ -482,8 +510,9 @@ Set-Location $solution_dir > $null
 # Configuring Chart.yaml
 Write-Host '  - Configuring Helm files...'
 $file = "$helm_dir\Chart.yaml"
+$tmp = ($solution.BaseName -replace 'BelgianRail.RivDec.','') -replace '.Api',''
 $content = ((Get-Content $file) `
-    -replace '^description:.*',"description: Helm chart for $($solution.BaseName) service" `
+    -replace '^description:.*',"description: Helm chart for the RIVDEC $tmp microservice" `
     -replace '^version:.*',"version: $jenkins_version" -join "`r`n")
 
 $content | Set-Content $file -Encoding Default
@@ -503,12 +532,12 @@ if (!$minikube) {
     $content = $content `
         -replace '  type: ClusterIP','  type: NodePort' `
         -replace 'replicaCount: 1','replicaCount: 2' `
-		-replace 'enabled: false','enabled: true' `
-		-replace 'annotations: {}', 'annotations:
+        -replace 'enabled: false','enabled: true' `
+        -replace 'annotations: {}', 'annotations:
     kubernetes.io/ingress.class: "f5"
     virtual-server.f5.com/http-port: "80"
     virtual-server.f5.com/partition: "K8s"' `
-		-replace 'hosts:[\s\S]*?local', 'hosts: []'
+        -replace 'hosts:[\s\S]*?local', 'hosts: []'
 }
 
 $resources = ""
@@ -526,7 +555,7 @@ if ($mincpu -or $minmem) {
     $resources += "  requests:`r`n" + $mincpu + $minmem
 }
 if ($resources) {
-    $resources = " resources:`r`n$resources`r`n"
+    $resources = "resources:`r`n$resources`r`n"
 
     $content = $content -replace 'resources: {}[\s\S]*?\n\n',$resources
 }
@@ -789,20 +818,20 @@ foreach($file in $files_found)
 
             switch ($file_env_lower) {
                 "acceptance"    {
-                    $ingress_host_ip = $f5_dns_acc_ip
-                    $env_code = "acc-"
+                    $ingress_host_ip = $dns_acc_ip
+                    $env_code = "acc"
                 }
                 "development"    {
-                    $ingress_host_ip = $f5_dns_dev_ip
-                    $env_code = "dev-"
+                    $ingress_host_ip = $dns_dev_ip
+                    $env_code = "dev"
                 }
                 "production"    {
-                    $ingress_host_ip = $f5_dns_prd_ip
+                    $ingress_host_ip = $dns_prd_ip
                     $env_code = ""
                 }
                 "test"    {
-                    $ingress_host_ip = $f5_dns_tst_ip
-                    $env_code = "tst-"
+                    $ingress_host_ip = $dns_tst_ip
+                    $env_code = "tst"
                 }
                 Default         {
                     $unknown
@@ -813,7 +842,7 @@ foreach($file in $files_found)
                 $ingress_host_name = $helm_project + "-k8s." + $env_code + "intern-belgianrail.be"
             }
             else {
-                $ingress_host_name = "ri-" + $unknown + ".api." + $env_code + "intern-belgianrail.be"
+                $ingress_host_name = ($ext_url_template -replace '{ENV}',$env_code) -replace '\.-','.'
             }
 
             $content = ("data:`r`n" +
@@ -887,7 +916,6 @@ else
     $content = ($content `
         -replace '(package.*\s+)(import)', "`$1import be.belgianrail.jenkins.jobs.DockerPublishOptions`r`n`$2") `
         -replace '(new MicroservicesJob[\s\S]*)', "def dockerPublishOptions = new DockerPublishOptions()
-dockerPublishOptions.dockerFeed = '$proget_feed'
 dockerPublishOptions.dockerRepository = '$docker_repo'
 dockerPublishOptions.dockerImageName = '$docker_img'
 dockerPublishOptions.dockerFileLocation = '$($main_proj.Directory.Name)'
