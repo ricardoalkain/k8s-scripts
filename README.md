@@ -29,26 +29,26 @@ Powershell script to automate configuration of a .NET Core project to be deploye
 
 #### Parameters
 
-    | Param                 | Description
-    | ------                | ------------
-    | -s <path>             | Solution file name. If omited the script needs to run in the solution folder.
-    | -p <path>             | Project file path. If omited the script prompts the user for it.
-    | -h <name>             | Helm project name. If omited the script prompts the user for it.
-    | -port <port>          | Port number of the external endpoint of the serivce. If omitted, uses value in hosting.json
-    | -readiness <settings> | Set readiness probe configuration in the format "<url>[,<delay>[,<timeout>[,<retries>]]]".
-    | -liveness <settings>  | Set liveness probe configuration in the format "<url>[,<interval>[,<timeout>[,<retries>]]]".
-    | -maxcpu  <value>      | Limits CPU cores usage for the pod. Ex: 1.5 or 1500m limits usage to 1.5 cores.
-    | -maxmem  <value>      | Limits memory usage for the pod, in bytes. Ex: 2147483648 = 2000Mi = 2Gi
-    | -mincpu  <value>      | Require this free CPU to schedule pod in a node. This can avoid pod from being started.
-    | -minmem  <value>      | Require this free memory to schedule pod in a node. This can avoid pod from being started.
-    | -url, -u <url>        | External URL. Inform service alias only of full URL with {ENV} as placeholder for environment code. Ex: svc-{ALIAS}.api.{ENV}-mydomain.com
-    | -http                 | Indicates that service is to be configured for HTTP access (configures HTTPS if omitted).
-    | -certificate <path>   | Certificate name (as installed in F5 partition).
-    | -f                    | Force the overwriting all files without confirmation.
-    | -help                 | Shows command line parameters documentation.
-    | -verbose, -v          | Show the content of all modified/created files.
-    | -stable               | Disable experimental/unstable changes.
-    | -minikube             | Prepare the application to deploy in a local Kubernetes cluster (Minikube).
+| Param                 | Description
+| ------                | ------------
+| -s *path*             | Solution file name. If omited the script needs to run in the solution folder.
+| -p *path*             | Project file path. If omited the script prompts the user for it.
+| -h *name*             | Helm project name. If omited the script prompts the user for it.
+| -port *port*          | Port number of the external endpoint of the serivce. If omitted, uses value in hosting.json
+| -readiness *settings* | Set readiness probe configuration in the format *url[,delay[,timeout[,retries]]]*.
+| -liveness *settings*  | Set liveness probe configuration in the format *url[,interval[,timeout[,retries]]]*.
+| -maxcpu  *value*      | Limits CPU cores usage for the pod. Ex: 1.5 or 1500m limits usage to 1.5 cores.
+| -maxmem  *value*      | Limits memory usage for the pod, in bytes. Ex: 2147483648 = 2000Mi = 2Gi
+| -mincpu  *value*      | Require this free CPU to schedule pod in a node. This can avoid pod from being started.
+| -minmem  *value*      | Require this free memory to schedule pod in a node. This can avoid pod from being started.
+| -url, -u *url*        | External URL. Inform service alias only of full URL with {ENV} as placeholder for environment code. Ex: *svc-{ALIAS}.api.{ENV}-mydomain.com*
+| -http                 | Indicates that service is to be configured for HTTP access (configures HTTPS if omitted).
+| -certificate *name*   | Certificate name (as installed in F5 partition).
+| -f                    | Force the overwriting all files without confirmation.
+| -help                 | Shows command line parameters documentation.
+| -verbose, -v          | Show the content of all modified/created files.
+| -stable               | Disable experimental/unstable changes.
+| -minikube             | Prepare the application to deploy in a local Kubernetes cluster (Minikube).
 
 ## Deployment
 
