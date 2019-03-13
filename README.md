@@ -31,9 +31,11 @@ You can run this script in an interactive way, providing all parameters manually
     | -s <path>     | Solution file name. If omited the script needs to run in the solution folder.
     | -p <path>     | Project file path. If omited the script prompts the user for it.
     | -h <name>     | Helm project name. If omited the script prompts the user for it.
+    | -port <port>  | Port number of the external endpoint of the serivce. If omitted, uses value in hosting.json
     | -f            | Force the overwriting all files without confirmation.
     | -help         | Shows command line parameters documentation.
     | -debug        | Show the content of all modified/created files.
+    | -stable       | Disable experimental/unstable changes.
 
 ## Deployment
 
@@ -61,3 +63,4 @@ Just another good example of laziness inspiring people XD
 
 - Make the script more "generic". Still contains lots of conventions that can/should be replaced by parameters.
 - Make a Bash version of the script to use it in other OS.
+- Option to rollback changes made by the script.

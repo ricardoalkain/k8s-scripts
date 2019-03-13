@@ -5,7 +5,8 @@ param(
     [switch] $f,        # Overwrites files without confirmation (force)
     [switch] $help,     # Displays quick help about the script
     [switch] $debug,    # Outputs all created/modified files content
-    [switch] $stable    # Disable all temporary/experimental changes
+    [switch] $stable,   # Disable all temporary/experimental changes
+    [int16]  $port      # Port number of the external endpoint of the serivce
 )
 
 set-executionpolicy remotesigned -s cu
@@ -27,15 +28,16 @@ $tag_db_user        = "{$secret_db_user}"
 $tag_db_pwd         = "{$secret_db_pwd}"
 $tag_connstr        = "User Id=$tag_db_user;Password=$tag_db_pwd"
 
+$default_port       = 80
 $probe_live         = '/swagger'
 $probe_ready        = $probe_live
 
 $unknown            = '"??????"'
 
 # The const bellow is used to highlight temporary/experimental blocks in conversion script
-# As soon as the changes are not more needed or become permanent, it's easy to search for it
-# and locate the blocks to be modified or removed. Changing its value to 0 also easily disable
-# all those blocks at once.
+# As soon as the changes are not needed anymore or they become permanent, it's easier to search
+# for it and locate the blocks to be modified or removed. Changing its value to 0 also easily
+# disable all those blocks at once.
 $xp_blocks          = (-not $stable)
 
 
@@ -59,6 +61,7 @@ if ($help) # Sorry MS, but Get-Help method sucks...
     Write-Host '-s <path>   Solution file path. If omited the script needs to run in the solution folder.'
     Write-Host '-p <path>   Project file path. If omited the script prompts the user for it.'
     Write-Host '-h <name>   Helm project name. If omited the script prompts the user for it.'
+    Write-Host '-port       Port number of the external endpoint of the serivce. If omitted, uses value in "hosting.json"'
     Write-Host '-f          Force the overwriting of all files without confirmation.'
     Write-Host '-debug      Show the content of all modified/created files.'
     Write-Host '-stable     Disable all temporary/experimental changes made by the script'
@@ -218,6 +221,30 @@ $docker_repo, $docker_img = $helm_project.Split('-')
 $docker_img_full = $docker_registry + '/' + $docker_feed + '/' + $docker_repo + '/' + $docker_img
 
 
+# Check external endpoint port number
+if (-not $port)
+{
+    $file = $main_proj.Directory.FullName + '\hosting.json'
+    if (Test-Path $file)
+    {
+        $content = (Get-Content ($file) -Raw)
+        if ($content -match '"?urls"?\s*:\s*".*?([0-9]+)"')
+        {
+            $port = [int16] $Matches[1]
+        }
+        else
+        {
+            $port = $default_port
+        }
+    }
+    else
+    {
+        $port = $default_port
+    }
+}
+
+
+
 
 
 
@@ -237,19 +264,19 @@ Write-Host 'Project File:       ' -NoNewline
 Write-Host $main_proj.Name -ForegroundColor Yellow
 Write-Host '.NET Core version:  ' -NoNewline
 Write-Host $publish_folder -ForegroundColor Yellow
+Write-Host 'Service Port:       ' -NoNewline
+Write-Host $port -ForegroundColor Yellow
 Write-Host ''
 
-if (-not $f)
+$op = Read-Host -Prompt "Confirm informations and continue? [y/n]"
+if ($op -match '[^yY]')
 {
-    $op = Read-Host -Prompt "Confirm informations and continue? [y/n]"
-    if ($op -match '[^yY]')
-    {
-        Write-Host ''
-        Write-Host 'Operation cancelled.' -ForegroundColor Yellow
-        Exit
-    }
     Write-Host ''
+    Write-Host 'Operation cancelled.' -ForegroundColor Red
+    Exit
 }
+Write-Host ''
+
 
 
 
@@ -259,7 +286,7 @@ if (-not $f)
 #
 # HELM
 #
-echo ''
+Write-Output ''
 Write-Host 'PREPARING HELM  -----------------------------------------------------------------------' -ForegroundColor Cyan
 
 # Create project
@@ -433,7 +460,7 @@ Write-Host 'PREPARING APPLICATION SETTINGS  ------------------------------------
 
 Write-Host '  - Creating application settings copies for Kubernetes:'
 
-$files_found = @(Get-ChildItem "$($main_proj.Directory.FullName)\appsettings.*.json")
+$files_found = @(Get-ChildItem "$($main_proj.Directory.FullName)\appsettings*.json")
 
 $overwrite = 1
 
@@ -454,9 +481,7 @@ if (-not $f)
     }
 }
 
-$postbuild_copies = @{
-    "appsettings.json" = "appsettings.json"
-}
+$postbuild_copies = @{}
 
 foreach($file in $files_found)
 {
@@ -479,13 +504,42 @@ foreach($file in $files_found)
 
     if ($xp_blocks)
     {
-        if ($file.Name.Contains('Development') -or $file.Name.Contains('Test') -or $file.Name.Contains('Acceptance'))
+        # Rename Kafka topics to avoid conflicts
+        $json = ($content| ConvertFrom-Json)
+        Write-Host "1" -ForegroundColor Red
+
+        if ($json.BackgroundServices)
         {
-            # Rename Kafka topics to avoid conflicts
-            $content = ($content `
-                -replace '("?.*?TopicName"?\s*:\s*")((?!k8s_).*?)(")','$1k8s_$2$3'
-            )
+            Write-Host "2" -ForegroundColor Red
+            foreach($section in $json.BackgroundServices)
+            {
+                Write-Host "3" -ForegroundColor Red
+                $section.psobject.Properties | ForEach-Object {
+                   if (($_.Name -ne 'Reference') -and ($_.Name -ne 'RealTime'))
+                   {
+                        Write-Host "4" -ForegroundColor Red
+                        $_.Value.psobject.Properties | ForEach-Object {
+                            Write-Host "5" -ForegroundColor Red
+                            $name = $_.Name
+                           $value = [string] $_.Value
+                           if ($name.Contains('TopicName') -and (-not $value.StartsWith('k8s_')))
+                           {
+                                Write-Host "6" -ForegroundColor Red
+                                $_.Value = 'k8s_' + $value
+                           }
+                       }
+                   }
+               }
+            }
+
+            $content = ($json | ConvertTo-Json -Depth 20)
         }
+
+        # Suffix cache databases with _K8S
+        $content = ($content -replace '(".*?Database=)(.*?cache)','$1$2_K8S')
+
+        # Invalidate TrainMap URLs
+        $content = ($content -replace '(".*?trainmap.*?"\s?:\s?"http.*)(azure\.)(.*?")','xxxxx')
     }
 
     $content | Set-Content $file_new -Encoding Default
@@ -832,10 +886,10 @@ Write-Host ''
 Write-Host ''
 Write-Host 'TODO: MANUAL SETTINGS -----------------------------------------------------------------' -ForegroundColor Yellow
 Write-Host "    . Change descriptions in $helm_dir\Chart.yaml (optional)" -ForegroundColor Yellow
-Write-Host "    . Check if 'service.port' value in $helm_dir\values.yaml needs to be changed (default=80)" -ForegroundColor Yellow
 Write-Host "    . Docker image will be created using .NET Core Runtime only. If you need an image with the sdk, then use microsoft/aspnetcore-build or dotnet:2.1-sdk. More info here https://github.com/aspnet/aspnet-docker/tree/master/2.1" -ForegroundColor Yellow
 Write-Host "    . Check if the option 'Build' is disabled for the Helm project in Visual Studio (menu Build -> Configuration Manager -> Release)" -ForegroundColor Yellow
 Write-Host "    . Check in the appsettings.*.kubernetes.json if the Kafka group ID is the correct one for this application (a '$kafka_group_suffix' suffix has been applied)." -ForegroundColor Yellow
+Write-Host "    . Check if 'service.port' value in $helm_dir\values.yaml needs to be changed (it was attributed the default port $default_port)" -ForegroundColor Yellow
 if ($keep_appsettings)
 {
     Write-Host '    . Verify the content of all "appsettings.*.kubernetes.json" files to check if all configurations are correct and updated.' -ForegroundColor Yellow
