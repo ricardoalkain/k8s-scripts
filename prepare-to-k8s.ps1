@@ -753,6 +753,8 @@ $content = '<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
         <attribute name="time" layout="${longdate:universalTime:true}" />
         <attribute name="level" layout="${level:upperCase=true}" />
         <attribute name="logger" layout="${logger}" />
+        <attribute name="kafkaTag" layout="${mdlc:item=KafkaTag}"/>
+        <attribute name="keyTag" layout="${mdlc:item=KeyTag}"/>
         <attribute name="message" layout="${message}" />
         <attribute name="exception" layout="${exception:format=tostring}" />
         <attribute name="aspRequestMethod" layout="${aspnet-request-method}" />
