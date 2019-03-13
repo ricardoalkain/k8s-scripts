@@ -30,8 +30,14 @@ $tag_db_pwd         = "{$secret_db_pwd}"
 $tag_connstr        = "User Id=$tag_db_user;Password=$tag_db_pwd"
 
 $default_port       = 80
-$probe_live         = '/swagger'
-$probe_ready        = $probe_live
+$probe_live         = '/hc'
+$probe_live_timeout = 1
+$probe_live_period  = 10
+$probe_live_retries = 3
+$probe_ready        = '/hc'
+$probe_ready_timeout= 10
+$probe_ready_delay  = 5
+$probe_ready_retries= 3
 
 $unknown            = '"??????"'
 
@@ -452,11 +458,34 @@ $yaml_deploy_pos_res
             - key: nlog.config
               path: nlog.config"
 
-# Set probes
-$content = $content `
-    -replace '(ports:[\s\S]*?containerPort:\s*?).*',$('$1','{{ .Values.service.port }}') `
-    -replace '(livenessProbe:\s*?httpGet:\s*?path:\s*?).*',$('$1';$probe_live) `
-    -replace '(readinessProbe:\s*?httpGet:\s*?path:\s*?).*',$('$1';$probe_ready)
+# Set ports
+$content = $content -replace '(ports:[\s\S]*?containerPort:\s*?).*',$('$1','{{ .Values.service.port }}')
+
+# Set probes - Readiness
+if ($content -match '(\s*)(readinessProbe:[\s\S]*?\1)\w')
+{
+    $content = '$`readinessProbe:' + `
+               '$1  httpGet:' + `
+               '$1    path: ' + $probe_ready + `
+               '$1    port: http' + `
+               '$1  timeoutSeconds: ' + $probe_ready_timeout + `
+               '$1  initialDelaySeconds: ' + $probe_ready_delay + `
+               '$1  failureThreshold: ' + $probe_ready_retries + `
+               '$'''
+}
+
+# Set probes - Liveness
+if ($content -match '(\s*)(livenessProbe:[\s\S]*?\1)\w')
+{
+    $content = '$`linenessProbe:' + `
+               '$1  httpGet:' + `
+               '$1    path: ' + $probe_live + `
+               '$1    port: http' + `
+               '$1  timeoutSeconds: ' + $probe_live_timeout + `
+               '$1  periodSeconds: ' + $probe_live_period + `
+               '$1  failureThreshold: ' + $probe_live_retries + `
+               '$'''
+}
 
 $content | Set-Content $file  -Encoding Default
 
@@ -752,6 +781,8 @@ $content = '<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
         <attribute name="time" layout="${longdate:universalTime:true}" />
         <attribute name="level" layout="${level:upperCase=true}" />
         <attribute name="logger" layout="${logger}" />
+        <attribute name="kafkaTag" layout="${mdlc:item=KafkaTag}"/>
+        <attribute name="keyTag" layout="${mdlc:item=KeyTag}"/>
         <attribute name="message" layout="${message}" />
         <attribute name="exception" layout="${exception:format=tostring}" />
         <attribute name="aspRequestMethod" layout="${aspnet-request-method}" />
