@@ -377,8 +377,14 @@ $content = (Get-Content $file -Raw) `
 
 if (!$minikube) {
     $content = (Get-Content $file -Raw) `
-        -replace '  type: ClusterIP','  type: LoadBalancer' `
+        -replace '  type: ClusterIP','  type: NodePort' `
         -replace 'replicaCount: 1','replicaCount: 2' `
+		-replace 'enabled: false','enabled: true' `
+		-replace 'annotations: {}', 'annotations:
+    kubernetes.io/ingress.class: "f5"
+    virtual-server.f5.com/http-port: "80"
+    virtual-server.f5.com/partition: "K8s"' `
+		-replace 'hosts:[\s\S]*?local', 'hosts: []'
 }
 
 $content | Set-Content $file  -Encoding Default
@@ -386,7 +392,7 @@ Write-Host "    : $file" -ForegroundColor DarkGreen
 
 if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
-# COnfiguring deployment.yaml
+# Configuring deployment.yaml
 $file = "$helm_dir\templates\deployment.yaml"
 $content = $(Get-Content $file -Raw)
 
@@ -457,6 +463,34 @@ $content | Set-Content $file  -Encoding Default
 Write-Host "    : $file" -ForegroundColor DarkGreen
 if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
+# configuring ingress.yaml
+$file = "$helm_dir\templates\ingress.yaml"
+$content = $(Get-Content $file -Raw)
+
+$content = $content `
+	-replace 'path:[\s\S]*?backend:','backend:' `
+	-replace 'servicePort: http','servicePort: 80'
+
+if ($content -match '([\s\S]*?)((.*)name:[\s\S]*)')
+{
+    $yaml_ingress_pre_name = $Matches[1].TrimEnd()
+    $yaml_ingress_pos_name = $Matches[2].TrimEnd()
+}
+else
+{
+    Write-Host "$file is not in the expected format. Maybe the version of Helm is not compatible whit this script." -ForegroundColor Red
+    Exit
+}
+
+$content = "$yaml_ingress_pre_name
+  namespace: {{ .Values.ingress.namespace }}
+$yaml_ingress_pos_name
+"
+
+$content | Set-Content $file  -Encoding Default
+
+Write-Host "    : $file" -ForegroundColor DarkGreen
+if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 # Configuring configmap.yaml
 $file = "$helm_dir\templates\configmap.yaml"
@@ -479,12 +513,6 @@ $content | Set-Content $file  -Encoding Default
 
 Write-Host "    : $file" -ForegroundColor DarkGreen
 if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
-
-
-
-
-
-
 
 #
 # Settings files
@@ -588,6 +616,23 @@ foreach($file in $files_found)
         if ($file.Name -match '\.(.*)\.json')
         {
             $file_env = $Matches[1]
+			$file_env_lower = $file_env.ToLower()
+			$file_env_lower_short = $file_env_lower.Substring(0,4) + "-"
+
+			if ($file_env_lower_short.StartsWith("t"))
+			{
+				$file_env_lower_short = $file_env_lower_short.Remove(1,1)
+			}
+			elseif ($file_env_lower_short.StartsWith("p"))
+			{
+				$file_env_lower_short = ""
+			}
+			else
+			{
+				$file_env_lower_short = $file_env_lower_short.Remove(3,1)
+			}
+
+			$ingress_host = $helm_project + "-k8s." + $file_env_lower_short + "intern-belgianrail.be"
 
             $yaml = "$helm_dir\values.$($file_env).yaml"
 
@@ -596,7 +641,13 @@ foreach($file in $files_found)
                         "    user: $unknown`r`n" +
                         "    password: $unknown`r`n" +
                         "  file: `"external/$($file.Name)`"`r`n" +
-                        "  environment: `"$file_env`"")
+                        "  environment: `"$file_env`"`r`n" +
+						"ingress:`r`n" +
+						"  namespace: rivdec-$file_env_lower`r`n" +
+						"  annotations: `r`n" +
+						"    virtual-server.f5.com/ip: `"10.251.149.21`"`r`n" +
+						"  hosts: `r`n" +
+						"    - $ingress_host`r`n")
 
             $content | Out-File $yaml  -Encoding Default
 
@@ -605,11 +656,6 @@ foreach($file in $files_found)
         }
     }
 }
-
-
-
-
-
 
 #
 # SECRETS
@@ -640,9 +686,6 @@ $content | Out-File $yaml  -Encoding Default
 
 Write-Host $yaml -ForegroundColor DarkGreen
 if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
-
-
-
 
 #
 # JENKINS
@@ -680,10 +723,6 @@ options.helmChartName = '$helm_project'
     Write-Host $file -ForegroundColor DarkGreen
     if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 }
-
-
-
-
 
 #
 # NLog
@@ -740,11 +779,6 @@ if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 $postbuild_copies["nlog.docker.config"] = "nlog.config"
 
-
-
-
-
-
 #
 # DOCKER
 #
@@ -781,17 +815,13 @@ Write-Host $file -ForegroundColor DarkGreen
 if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 
-
-
-
-
 #
 # GIT
 #
 Write-Output ''
 Write-Host 'GIT FILES  ----------------------------------------------------------------------------' -ForegroundColor Cyan
 
-# Docker file
+# Git ignore file
 $file = $solution_dir + '\.gitignore'
 Write-Host '  - Writing Git Ignore file... ' -NoNewline
 
@@ -803,8 +833,6 @@ helm/**/*.tgz
 helm/**/external/*" -Encoding Default
 }
 Write-Host 'OK' -ForegroundColor DarkGreen
-
-
 
 
 #
@@ -927,9 +955,11 @@ Write-Host "    . Check if 'service.port' value in $helm_dir\values.yaml needs t
 if ($keep_appsettings)
 {
     Write-Host '    . Verify the content of all "appsettings.*.kubernetes.json" files to check if all configurations are correct and updated.' -ForegroundColor Yellow
+	Write-Host '    . Check for any absolute paths in the "appsettings.*.kubernetes.json" files and replace them by relative paths.' -ForegroundColor Yellow
 }
-
-
+if (!$minikube) {
+	Write-Host '    . Verify the content of all "values.*.yaml" files to check if the ingress information is correct.' -ForegroundColor Yellow
+}
 
 Write-Host ''
 Write-Host ''

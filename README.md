@@ -62,6 +62,6 @@ Just another good example of laziness inspiring people XD
 
 ### TODO
 
-- Make the script more "generic". Still contains lots of conventions that can/should be replaced by parameters.
+- Make the script more "generic". Still contains lots of conventions that can/should be configurable by parameters.
 - Make a Bash version of the script to use it in other OS.
 - Option to rollback changes made by the script.
