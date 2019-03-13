@@ -34,8 +34,9 @@ You can run this script in an interactive way, providing all parameters manually
     | -port <port>  | Port number of the external endpoint of the serivce. If omitted, uses value in hosting.json
     | -f            | Force the overwriting all files without confirmation.
     | -help         | Shows command line parameters documentation.
-    | -debug        | Show the content of all modified/created files.
+    | -verbose, -v  | Show the content of all modified/created files.
     | -stable       | Disable experimental/unstable changes.
+    | -minikube     | Prepare the application to deploy in a local Kubernetes cluster (Minikube).
 
 ## Deployment
 

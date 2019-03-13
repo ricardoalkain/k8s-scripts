@@ -4,10 +4,10 @@ param(
     [string] $h,        # Helm project/chart path
     [switch] $f,        # Overwrites files without confirmation (force)
     [switch] $help,     # Displays quick help about the script
-    [switch] $debug,    # Outputs all created/modified files content
+    [switch] $verbose,  # Outputs all created/modified files content
     [switch] $stable,   # Disable all temporary/experimental changes
     [int16]  $port,     # Port number of the external endpoint of the serivce
-    [switch] $rollback  # TODO: Undo all modifications made by this script
+    [switch] $minikube  # Configure solution to run on Minikube instead of K8s Cluster
 )
 
 set-executionpolicy remotesigned -s cu
@@ -59,22 +59,23 @@ if ($help) # Sorry MS, but Get-Help method sucks...
     Write-Host ($MyInvocation.MyCommand.Name) "[[parameter value] | [parameter]]"
     Write-Host ''
     Write-Host 'PARAMETERS' -ForegroundColor DarkGray
-    Write-Host '-s <path>   Solution file path. If omited the script needs to run in the solution folder.'
-    Write-Host '-p <path>   Project file path. If omited the script prompts the user for it.'
-    Write-Host '-h <name>   Helm project name. If omited the script prompts the user for it.'
-    Write-Host '-port       Port number of the external endpoint of the serivce. If omitted, uses value in "hosting.json"'
-    Write-Host '-f          Force the overwriting of all files without confirmation.'
-    Write-Host '-debug      Show the content of all modified/created files.'
-    Write-Host '-stable     Disable all temporary/experimental changes made by the script'
-    Write-Host '-help       Prints info about the script anf list of parameters.'
+    Write-Host '-s <path>       Solution file path. If omited the script needs to run in the solution folder.'
+    Write-Host '-p <path>       Project file path. If omited the script prompts the user for it.'
+    Write-Host '-h <name>       Helm project name. If omited the script prompts the user for it.'
+    Write-Host '-port           Port number of the external endpoint of the serivce. If omitted, uses value in "hosting.json"'
+    Write-Host '-f              Force the overwriting of all files without confirmation.'
+    Write-Host '-minikube       Prepare the application to deploy in local Kubernetes cluster (Minikube).'
+    Write-Host '-verbose, -v    Show the content of all modified/created files.'
+    Write-Host '-stable         Disable all temporary/experimental changes made by the script'
+    Write-Host '-help           Prints info about the script anf list of parameters.'
     Write-Host ''
 
     exit
 }
 
-if ($debug)
+if ($verbose)
 {
-    Write-Host 'Running in DEBUG MODE!' -ForegroundColor DarkYellow
+    Write-Host 'Running in VERBOSE MODE!' -ForegroundColor DarkYellow
     Write-Host ''
 }
 
@@ -245,6 +246,26 @@ if (-not $port)
 }
 
 
+if ($minikube) {
+    $docker_registry = 'proget_test'
+
+    $file = "$solution_dir\helm\$helm_project\Chart.yaml"
+    $jenkins_version = '0.1'
+    if (Test-Path $file) {
+        $content = (Get-Content $file -Raw)
+        if ($content -match '\sversion:\s*([0-9]+)\.?([0-9]*)') {
+            $op = $Matches[1] + '.' + [string]([int32]$Matches[2] + 1)
+        }
+    }
+
+    $op = Read-Host "Please inform Chart/Docker image version (press ENTER to accept $jenkins_version):"
+
+    if ('' -ne $op) {
+        $jenkins_version = $op
+    }
+
+    Write-Host ''
+}
 
 
 
@@ -254,19 +275,23 @@ if (-not $port)
 #
 Write-Host 'The solution is about to be configured to deploy and run in the Kubernetes cluster.'
 Write-Host ('During the process the name of all created/modified files will be printed. Please check the files before deploying. ' +
-'Moreover, as some settings depend on each application, a TODO list will be presented at the end. ' +
-'Follow these steps to complete the configuration.
-')
-Write-Host 'Helm Project:       ' -NoNewline
+            'Moreover, as some settings depend on each application, a TODO list will be presented at the end. ' +
+            'Follow these steps to complete the configuration.')
+Write-Host 'Helm Project:         ' -NoNewline
 Write-Host $helm_project -ForegroundColor Yellow
-Write-Host 'Solution File:      ' -NoNewline
+Write-Host 'Solution File:        ' -NoNewline
 Write-Host $solution.Name -ForegroundColor Yellow
-Write-Host 'Project File:       ' -NoNewline
+Write-Host 'Project File:         ' -NoNewline
 Write-Host $main_proj.Name -ForegroundColor Yellow
-Write-Host '.NET Core version:  ' -NoNewline
+Write-Host '.NET Core version:    ' -NoNewline
 Write-Host $publish_folder -ForegroundColor Yellow
-Write-Host 'Service Port:       ' -NoNewline
+Write-Host 'Service Port:         ' -NoNewline
 Write-Host $port -ForegroundColor Yellow
+if ($minikube) {
+    Write-Host 'Image/Chart version:  ' -NoNewline
+    Write-Host $port -ForegroundColor Yellow
+}
+
 Write-Host ''
 
 $op = Read-Host -Prompt "Confirm informations and continue? [y/n]"
@@ -340,7 +365,7 @@ $content = ((Get-Content $file) `
 $content | Set-Content $file -Encoding Default
 
 Write-Host "    : $file" -ForegroundColor DarkGreen
-if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 # Configuring values.yaml
 $file = "$helm_dir\values.yaml"
@@ -348,14 +373,18 @@ $file = "$helm_dir\values.yaml"
 $content = (Get-Content $file -Raw) `
     -replace '  tag: stable',"  tag: $jenkins_version" `
     -replace '  repository:.*',"  repository: $docker_img_full" `
-    -replace '  type: ClusterIP','  type: LoadBalancer' `
     -replace '  port: 80',"  port: $port" `
-    -replace 'replicaCount: 1','replicaCount: 2' `
+
+if (!$minikube) {
+    $content = (Get-Content $file -Raw) `
+        -replace '  type: ClusterIP','  type: LoadBalancer' `
+        -replace 'replicaCount: 1','replicaCount: 2' `
+}
 
 $content | Set-Content $file  -Encoding Default
 Write-Host "    : $file" -ForegroundColor DarkGreen
 
-if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 # COnfiguring deployment.yaml
 $file = "$helm_dir\templates\deployment.yaml"
@@ -426,7 +455,7 @@ $content = $content `
 $content | Set-Content $file  -Encoding Default
 
 Write-Host "    : $file" -ForegroundColor DarkGreen
-if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 
 # Configuring configmap.yaml
@@ -449,7 +478,7 @@ data:
 $content | Set-Content $file  -Encoding Default
 
 Write-Host "    : $file" -ForegroundColor DarkGreen
-if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 
 
@@ -549,7 +578,7 @@ foreach($file in $files_found)
 
     $content | Set-Content $file_new -Encoding Default
     Write-Host "    : $file_new" -ForegroundColor DarkGreen
-    if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+    if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
     $postbuild_copies[(Split-Path $file_new -Leaf)] = $file.Name
 
@@ -572,7 +601,7 @@ foreach($file in $files_found)
             $content | Out-File $yaml  -Encoding Default
 
             Write-Host "    : $yaml" -ForegroundColor DarkGreen
-            if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+            if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
         }
     }
 }
@@ -610,7 +639,7 @@ data:
 $content | Out-File $yaml  -Encoding Default
 
 Write-Host $yaml -ForegroundColor DarkGreen
-if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 
 
@@ -649,7 +678,7 @@ options.helmChartName = '$helm_project'
     $content | Out-File $file  -Encoding Default
 
     Write-Host $file -ForegroundColor DarkGreen
-    if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+    if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 }
 
 
@@ -707,7 +736,7 @@ $content = '<nlog xmlns="http://www.nlog-project.org/schemas/NLog.xsd"
 $content | Out-File $file_new  -Encoding Default
 
 Write-Host $file_new -ForegroundColor DarkGreen
-if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 $postbuild_copies["nlog.docker.config"] = "nlog.config"
 
@@ -735,7 +764,7 @@ ENTRYPOINT [`"dotnet`", `"$($main_proj.BaseName).dll`"]"
 $content | Out-File $file -Encoding Default
 
 Write-Host $file -ForegroundColor DarkGreen
-if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 # Ignore file
 $file = $main_proj.Directory.FullName + '\.dockerignore'
@@ -749,7 +778,7 @@ $content = "**/appsettings.json
 $content | Out-File $file -Encoding Default
 
 Write-Host $file -ForegroundColor DarkGreen
-if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 
 
 
@@ -817,7 +846,7 @@ else
     $content | Set-Content ($solution.FullName) -Encoding UTF8
 
     Write-Host $($solution.FullName) -ForegroundColor DarkGreen
-    if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+    if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 }
 
 $file = $main_proj.FullName
@@ -874,7 +903,7 @@ ForEach($source in $postbuild_copies.Keys)
 }
 
 $content.Save($file)
-if ($debug)
+if ($verbose)
 {
     $content = (Get-Content $file -Raw)
     Write-Host $content -ForegroundColor DarkGray
