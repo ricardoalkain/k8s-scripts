@@ -1,48 +1,98 @@
 param(
-    [string] $s,    # Solution file name. If omited the script needs to run in the solution folder.
-    [string] $p,    # Project file path. If omited the script prompts the user for it.
-    [string] $h,    # Helm project name. If omited the script prompts the user for it.
-    [switch] $f,    # Force the overwriting all files without confirmation
-    [switch] $debug # Show the content of all modified/created files.
+    [string] $s,        # Solution path
+    [string] $p,        # Main application project path
+    [string] $h,        # Helm project/chart path
+    [switch] $f,        # Overwrites files without confirmation (force)
+    [switch] $help,     # Displays quick help about the script
+    [switch] $debug,    # Outputs all created/modified files content
+    [switch] $stable    # Disable all temporary/experimental changes
 )
 
 set-executionpolicy remotesigned -s cu
 $ErrorActionPreference = "Stop"
 
-Clear-Host
+
 
 # Constants
-$jenkins_version = "{JENKINS_VERSION}"
-$docker_registry = "docker-registry.intern-belgianrail.be:9999"
-$docker_feed = "proget_test"
-$proget_feed = $docker_feed
-$secret_db_user = 'DB_USER'
-$secret_db_pwd = 'DB_PASSWORD'
-$env_db_user = "K8S_$secret_db_user"
-$env_db_pwd = "K8S_$secret_db_pwd"
-$tag_db_user = "{$secret_db_user}"
-$tag_db_pwd = "{$secret_db_pwd}"
-$tag_connstr = "User Id=$tag_db_user;Password=$tag_db_pwd"
+$jenkins_version    = "{JENKINS_VERSION}"
+$docker_registry    = "docker-registry.intern-belgianrail.be:9999"
+$docker_feed        = "ypto_docker"
+$proget_feed        = $docker_feed
+$kafka_group_suffix = '-k8s'
+$secret_db_user     = 'DB_USER'
+$secret_db_pwd      = 'DB_PASSWORD'
+$env_db_user        = "K8S_$secret_db_user"
+$env_db_pwd         = "K8S_$secret_db_pwd"
+$tag_db_user        = "{$secret_db_user}"
+$tag_db_pwd         = "{$secret_db_pwd}"
+$tag_connstr        = "User Id=$tag_db_user;Password=$tag_db_pwd"
 
-$probe_live = '/swagger'
-$probe_ready = $probe_live
+$probe_live         = '/swagger'
+$probe_ready        = $probe_live
 
-$unknown = '"??????"'
+$unknown            = '"??????"'
+
+# The const bellow is used to highlight temporary/experimental blocks in conversion script
+# As soon as the changes are not more needed or become permanent, it's easy to search for it
+# and locate the blocks to be modified or removed. Changing its value to 0 also easily disable
+# all those blocks at once.
+$xp_blocks          = (-not $stable)
+
+
+
+
+Write-Host ''
+Write-Host ''
+Write-Host ''
+Write-Host 'Automated Configuration Script for Kubernetes deploy' -ForegroundColor White
+Write-Host ''
+
+if ($help) # Sorry MS, but Get-Help method sucks...
+{
+    Write-Host 'DESCRIPTION' -ForegroundColor DarkGray
+    Write-Host 'Prepares a .NET Core application to be deployed into Kubernetes cluster through Helm.'
+    Write-Host ''
+    Write-Host 'USAGE' -ForegroundColor DarkGray
+    Write-Host ($MyInvocation.MyCommand.Name) "[[parameter value] | [parameter]]"
+    Write-Host ''
+    Write-Host 'PARAMETERS' -ForegroundColor DarkGray
+    Write-Host '-s <path>   Solution file path. If omited the script needs to run in the solution folder.'
+    Write-Host '-p <path>   Project file path. If omited the script prompts the user for it.'
+    Write-Host '-h <name>   Helm project name. If omited the script prompts the user for it.'
+    Write-Host '-f          Force the overwriting of all files without confirmation.'
+    Write-Host '-debug      Show the content of all modified/created files.'
+    Write-Host '-stable     Disable all temporary/experimental changes made by the script'
+    Write-Host '-help       Prints info about the script anf list of parameters.'
+    Write-Host ''
+
+    exit
+}
+
+if ($debug)
+{
+    Write-Host 'Running in DEBUG MODE!' -ForegroundColor DarkYellow
+    Write-Host ''
+}
 
 
 #
 # Validations
 #
-if ($debug) { Write-Host 'Running in DEBUG MODE!' -ForegroundColor DarkYellow }
-Write-Host ''
-
-# Check if Helm is instaled
-if ((Get-Command "helm.exe" -ErrorAction SilentlyContinue) -eq $null)
+# Check if Helm is installed
+if ($null -eq (Get-Command "helm.exe" -ErrorAction SilentlyContinue))
 {
    Write-Host 'Helm is not properly installed on this machine: "helm.exe" not found in the system path.' -ForegroundColor Red
    exit
 }
 
+
+
+
+#
+# Get script data
+#
+
+# Solution file
 if ('' -eq $s)
 {
     $solution = [System.IO.FileInfo] (@(Get-ChildItem *.sln)[0])
@@ -52,6 +102,11 @@ if ('' -eq $s)
         Write-Host 'Solution file not found. Run this script in a valid solution folder or use -s to specify a solution file.' -ForegroundColor Red
         exit
     }
+
+    Write-Host 'Solution "' -NoNewline
+    Write-Host $solution.Name -ForegroundColor Cyan -NoNewline
+    Write-Host '" found in the current directory.'
+    Write-Host ''
 }
 else
 {
@@ -65,35 +120,45 @@ else
 }
 
 $solution_dir = $solution.Directory.FullName
-cd $solution_dir
+Set-Location $solution_dir
 
 
-
-
-#
-# Get script data
-#
-Write-Host 'WELCOME!
-The solution ' -NoNewline
-Write-Host $solution.BaseName -ForegroundColor Cyan -NoNewline
-Write-Host ' is about to be configured to deploy and run in the Kubernetes cluster.'
-Write-Host ('During the process all created/modified files will be printed. Please check the files before deploying. ' +
-'Moreover, as some settings depend on each application, a TODO list will be presented at the end. ' +
-'Follow these steps to complete the configuration.')
-Write-Host ''
-
+# Helm project/chart name
 if ('' -eq $h)
 {
-    $helm_project = Read-Host "Please enter Helm project name. It's recommended to use the form <project>-<application> (e.g. rivdec-associations). This information will also be used to create the Docker image and configure Jenkins file`r`n"
+    Write-Host ('Please enter Helm project/chart name. ' +
+    'It is recommended to use the form <project>-<application> (e.g. rivdec-associations). ' +
+    'This information will also be used to create the Docker image and configure Jenkins file.')
+
+    Write-Host $solution.BaseName
+    if ($solution.BaseName -match '([\w]*?)\.([\w]*?)$')
+    {
+        $helm_project = ($Matches[1] + '-' + $Matches[2]).ToLower()
+        Write-Host '(Leave it blank to use the suggested name "' -NoNewline -ForegroundColor DarkGray
+        Write-Host $helm_project -NoNewline -ForegroundColor DarkGray
+        Write-Host '")' -ForegroundColor DarkGray
+    }
+
+    $op = Read-Host "Helm Project"
+    Write-Host ''
+
+    if ($op -ne '')
+    {
+        $helm_project = $op.ToLower()
+    }
 }
 else
 {
     $helm_project = $h.ToLower()
-    Write-Host "Helm project name: " -NoNewline
-    Write-Host $helm_project -ForegroundColor Cyan
 }
-Write-Host ''
 
+if ($helm_project -eq '')
+{
+    Write-Host "No Helm project/chart name defined. Operation canceled." -ForegroundColor Red
+    Exit
+}
+
+# Application project file
 if ('' -eq $p)
 {
     # Select the entrypoint application
@@ -106,26 +171,25 @@ if ('' -eq $p)
         exit
     }
 
-    $i = 1
+    $op = 1
     foreach($proj in $files_found)
     {
-        Write-Host '  ' $i ': ' -NoNewline -ForegroundColor Cyan
+        Write-Host '  ' $op ': ' -NoNewline -ForegroundColor Cyan
         Write-Host $proj.BaseName
-        $i = $i + 1
+        $op = $op + 1
     }
     echo ''
-    $i = Read-Host "Please choose the APPLICATION project"
-    $main_proj = [System.IO.FileInfo]$files_found[$i - 1]
+    $op = Read-Host "Please choose the APPLICATION project"
+    $main_proj = [System.IO.FileInfo]$files_found[$op - 1]
+    Write-Host ''
 
 }
 else
 {
     $main_proj = [System.IO.FileInfo] (Get-ChildItem $p)
-    Write-Host 'Project to be configured: ' -NoNewline
-    Write-Host $($main_proj.Name) -ForegroundColor Cyan
 }
 
-if ($main_proj -eq $null)
+if ($null -eq $main_proj)
 {
     Write-Host 'Invalid option!' -ForegroundColor Red
     Exit
@@ -153,10 +217,39 @@ else
 $docker_repo, $docker_img = $helm_project.Split('-')
 $docker_img_full = $docker_registry + '/' + $docker_feed + '/' + $docker_repo + '/' + $docker_img
 
-Write-Host '.NET Core version: ' -NoNewline
-Write-Host $publish_folder -ForegroundColor Cyan
 
 
+
+
+#
+# Summary
+#
+Write-Host 'The solution is about to be configured to deploy and run in the Kubernetes cluster.'
+Write-Host ('During the process the name of all created/modified files will be printed. Please check the files before deploying. ' +
+'Moreover, as some settings depend on each application, a TODO list will be presented at the end. ' +
+'Follow these steps to complete the configuration.
+')
+Write-Host 'Helm Project:       ' -NoNewline
+Write-Host $helm_project -ForegroundColor Yellow
+Write-Host 'Solution File:      ' -NoNewline
+Write-Host $solution.Name -ForegroundColor Yellow
+Write-Host 'Project File:       ' -NoNewline
+Write-Host $main_proj.Name -ForegroundColor Yellow
+Write-Host '.NET Core version:  ' -NoNewline
+Write-Host $publish_folder -ForegroundColor Yellow
+Write-Host ''
+
+if (-not $f)
+{
+    $op = Read-Host -Prompt "Confirm informations and continue? [y/n]"
+    if ($op -match '[^yY]')
+    {
+        Write-Host ''
+        Write-Host 'Operation cancelled.' -ForegroundColor Yellow
+        Exit
+    }
+    Write-Host ''
+}
 
 
 
@@ -197,19 +290,19 @@ if (Test-Path "$solution_dir\helm")
 }
 
 mkdir helm > $null
-cd .\helm > $null
+Set-Location .\helm > $null
 
 Write-Host "  - Creating Helm project... " -NoNewline
 
 helm create $helm_project > $null
-cd $helm_project > $null
+Set-Location $helm_project > $null
 mkdir external > $null
 
 $helm_dir = $solution_dir + '\helm\' + $helm_project
 Write-Host $helm_dir -ForegroundColor DarkGreen
-cd $solution_dir > $null
+Set-Location $solution_dir > $null
 
-# Configure Helm files
+# Configuring Chart.yaml
 Write-Host '  - Configuring Helm files...'
 $file = "$helm_dir\Chart.yaml"
 $content = ((Get-Content $file) -replace '^version:.*',"version: $jenkins_version" -join "`r`n")
@@ -219,7 +312,7 @@ $content | Set-Content $file -Encoding Default
 Write-Host "    : $file" -ForegroundColor DarkGreen
 if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 
-# FILE: Values
+# Configuring values.yaml
 $file = "$helm_dir\values.yaml"
 
 $content = (Get-Content $file -Raw) `
@@ -233,7 +326,7 @@ Write-Host "    : $file" -ForegroundColor DarkGreen
 
 if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 
-# FILE: Deployment
+# COnfiguring deployment.yaml
 $file = "$helm_dir\templates\deployment.yaml"
 $content = $(Get-Content $file -Raw)
 
@@ -304,7 +397,7 @@ Write-Host "    : $file" -ForegroundColor DarkGreen
 if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 
 
-# FILE: Config Map
+# Configuring configmap.yaml
 $file = "$helm_dir\templates\configmap.yaml"
 
 $content = "apiVersion: v1
@@ -317,9 +410,9 @@ metadata:
     chart: {{ .Chart.Name }}-{{ .Chart.Version }}
     app: {{ template `"$helm_project.name`" . }}
 data:
-  {{ (.Files.Glob `"external/appsettings.json`").AsConfig | indent 2 }}
-  {{ (.Files.Glob .Values.data.file).AsConfig | indent 2 }}
-  {{ (.Files.Glob `"external/nlog.config`").AsConfig | indent 2 }}"
+{{ (.Files.Glob `"external/appsettings.json`").AsConfig | indent 2 }}
+{{ (.Files.Glob .Values.data.file).AsConfig | indent 2 }}
+{{ (.Files.Glob `"external/nlog.config`").AsConfig | indent 2 }}"
 
 $content | Set-Content $file  -Encoding Default
 
@@ -330,81 +423,98 @@ if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 
 
 
+
+
 #
-# Setting files
+# Settings files
 #
-echo ''
+Write-Output ''
 Write-Host 'PREPARING APPLICATION SETTINGS  -------------------------------------------------------' -ForegroundColor Cyan
 
 Write-Host '  - Creating application settings copies for Kubernetes:'
 
-$files_found = @(gci "$($main_proj.Directory.FullName)\appsettings.*.json")
+$files_found = @(Get-ChildItem "$($main_proj.Directory.FullName)\appsettings.*.json")
 
 $overwrite = 1
 
+$keep_appsettings = 0
 if (-not $f)
 {
     if ($files_found -match "kubernetes")
     {
         Write-Host "      There are already App Settings files prepared to Kubernetes in this project. " -ForegroundColor Yellow
-        $overwrite = (Read-Host -Prompt "      Do you want to overwrite them? [y/n]") -match "[yY]"
+        if ((Read-Host -Prompt "      Do you want to overwrite them? [y/n]") -match "[yY]")
+        {
+            Remove-Item "$($main_proj.Directory.FullName)\appsettings*kubernetes.json"
+        }
+        else
+        {
+            $keep_appsettings = 1
+        }
     }
 }
 
 $postbuild_copies = @{
-    "appsettings.json" = ""
+    "appsettings.json" = "appsettings.json"
 }
 
-$replace_appsettings = 0
 foreach($file in $files_found)
 {
-    if ($file.BaseName.Contains('kubernetes'))
+    if ((!(Test-Path $file.FullName)) -or $file.BaseName.Contains('.Local') -or $file.BaseName.Contains('.kubernetes'))
     {
-        $file_new = $file.FullName
-        $replace_appsettings = $overwrite
-    }
-    else
-    {
-        $file_new = $file.FullName.Replace(".json", ".kubernetes.json")
-        Copy-Item $file.FullName -Destination $file_new > $null
-        $replace_appsettings = 1
+        continue
     }
 
-    if ($replace_appsettings)
+    $file_new = $file.FullName.Replace(".json", ".kubernetes.json")
+    Copy-Item $file.FullName -Destination $file_new > $null
+
+    # Insert User/Password into connection strings
+    $content = ((Get-Content $file_new -Raw) `
+        -replace 'User Id=[^";]*',"User Id=$tag_db_user" `
+        -replace 'Password=[^";]*',"Password=$tag_db_pwd" `
+        -replace 'Integrated Security=true',$tag_connstr `
+        -replace '(CorsOrigins.*?)\[(.*?)\]', '$1[]' `
+        -replace "(Kafka[\s\S]*?GroupId.*:.*?`")(.*?(?<!$kafka_group_suffix))(`")", "`$1`$2$kafka_group_suffix`$3"
+    )
+
+    if ($xp_blocks)
     {
-        # Insert User/Password into connection strings
-        $content = ((Get-Content $file_new -Raw) `
-            -replace 'User Id=[^";]*',"User Id=$tag_db_user" `
-            -replace 'Password=[^";]*',"Password=$tag_db_pwd" `
-            -replace 'Integrated Security=true',$tag_connstr)
-
-        $content | Set-Content $file_new -Encoding Default
-        Write-Host "    : $file_new" -ForegroundColor DarkGreen
-        if ($debug) { Write-Host $content -ForegroundColor DarkGray }
-
-        # Creates additional values.yaml files
-        $content = $(Get-Content $file_new -Raw)
+        if ($file.Name.Contains('Development') -or $file.Name.Contains('Test') -or $file.Name.Contains('Acceptance'))
+        {
+            # Rename Kafka topics to avoid conflicts
+            $content = ($content `
+                -replace '("?.*?TopicName"?\s*:\s*")((?!k8s_).*?)(")','$1k8s_$2$3'
+            )
+        }
     }
+
+    $content | Set-Content $file_new -Encoding Default
+    Write-Host "    : $file_new" -ForegroundColor DarkGreen
+    if ($debug) { Write-Host $content -ForegroundColor DarkGray }
 
     $postbuild_copies[(Split-Path $file_new -Leaf)] = $file.Name
 
-    if ($file.Name -match '\.(.*)\.json')
+    # Creates additional values.yaml files
+    if (-not $file.BaseName.Contains('kubernetes'))
     {
-        $file_env = $Matches[1]
+        if ($file.Name -match '\.(.*)\.json')
+        {
+            $file_env = $Matches[1]
 
-        $yaml = "$helm_dir\values.$($file_env).yaml"
+            $yaml = "$helm_dir\values.$($file_env).yaml"
 
-        $content = "data:
-  db:
-    user: $unknown
-    password: $unknown
-  file: `"external/$($file.Name)`"
-  environment: `"$file_env`""
+            $content = ("data:`r`n" +
+                        "  db:`r`n" +
+                        "    user: $unknown`r`n" +
+                        "    password: $unknown`r`n" +
+                        "  file: `"external/$($file.Name)`"`r`n" +
+                        "  environment: `"$file_env`"")
 
-        $content | Out-File $yaml  -Encoding Default
+            $content | Out-File $yaml  -Encoding Default
 
-        Write-Host "    : $yaml" -ForegroundColor DarkGreen
-        if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+            Write-Host "    : $yaml" -ForegroundColor DarkGreen
+            if ($debug) { Write-Host $content -ForegroundColor DarkGray }
+        }
     }
 }
 
@@ -654,7 +764,7 @@ else
 $file = $main_proj.FullName
 Write-Host '  - Post Build Events: Copy files to Helm folder'
 
-# It's safer to work on csproj as XML so we preserve any previous Port Build events
+# It's safer to work on csproj as XML so we preserve any previous Post Build events
 # without the risk of duplicating the tags
 $content = New-Object XML
 $content.Load($file) > $null
@@ -677,9 +787,18 @@ ForEach($source in $postbuild_copies.Keys)
 {
     $target = $postbuild_copies[$source]
 
+    $file_new = '$(ProjectDir)' + $source
+
+    # Removes the old operation if it alredy exists
+    $node = $target_node.SelectSingleNode('Copy[@SourceFiles="' + $file_new + '"]')
+    if ($node)
+    {
+        $node.ParentNode.RemoveChild($node)
+    }
+
     $node = $content.CreateElement('Copy')
     $attr = $content.CreateAttribute('SourceFiles')
-    $attr.Value = '$(ProjectDir)' + $source
+    $attr.Value = $file_new
     $node.Attributes.Append($attr) > $null
     if ($target -eq '')
     {
@@ -714,12 +833,12 @@ Write-Host ''
 Write-Host 'TODO: MANUAL SETTINGS -----------------------------------------------------------------' -ForegroundColor Yellow
 Write-Host "    . Change descriptions in $helm_dir\Chart.yaml (optional)" -ForegroundColor Yellow
 Write-Host "    . Check if 'service.port' value in $helm_dir\values.yaml needs to be changed (default=80)" -ForegroundColor Yellow
-Write-Host "    . Set Database user name and password for each 'values.<environment>.yaml' file" -ForegroundColor Yellow
 Write-Host "    . Docker image will be created using .NET Core Runtime only. If you need an image with the sdk, then use microsoft/aspnetcore-build or dotnet:2.1-sdk. More info here https://github.com/aspnet/aspnet-docker/tree/master/2.1" -ForegroundColor Yellow
-Write-Host "    . Check if the option 'Build' is disabled for the Helm project in Visual Studio (menu Build -> Configuration Manager -> Release)"
-if (-not $replace_appsettings)
+Write-Host "    . Check if the option 'Build' is disabled for the Helm project in Visual Studio (menu Build -> Configuration Manager -> Release)" -ForegroundColor Yellow
+Write-Host "    . Check in the appsettings.*.kubernetes.json if the Kafka group ID is the correct one for this application (a '$kafka_group_suffix' suffix has been applied)." -ForegroundColor Yellow
+if ($keep_appsettings)
 {
-    Write-Host '    . Verify the content of all "appsettings.*.kubernetes.json" files to check if all configurations are correct and updated.'
+    Write-Host '    . Verify the content of all "appsettings.*.kubernetes.json" files to check if all configurations are correct and updated.' -ForegroundColor Yellow
 }
 
 
