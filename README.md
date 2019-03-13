@@ -16,17 +16,25 @@ You can run this script in an interactive way, providing all parameters manually
 
 - Open a Powershell window
 - Navigate to the solution folder. Ex: `cd <solution folder>`
-- Type the relative or absolute path of the script. Ex: `..\prepare-to-k8s.ps1 -v`
+- Type the relative or absolute path of the script. Ex: `..\prepare-to-k8s.ps1`
 - Follow the instructions
+
+### Executing (Command Line)
+
+- Open a PowerShell window
+- Navigate to the script folder or type the full path. Ex: `C:\Tools\k8s\scripts\prepare-to-k8s.ps1 {parameters}`
+
+#### Parameters
+
+    |-s     | Solution file name. If omited the script needs to run in the solution folder. |
+    |-p     | Project file path. If omited the script prompts the user for it.              |
+    |-h     | Helm project name. If omited the script prompts the user for it.              |
+    |-f     | Force the overwriting all files without confirmation.                         |
+    |-debug | Show the content of all modified/created files.                               |
 
 ## Deployment
 
 Refer to [Helm](https://helm.sh/) page for details on how to register a Helm Chart and then deploy your application to Kubernetes.
-
-## TODO
-
-- Make the script more "generic". Still contains lots of conventions that can/should be replaced by parameters.
-- Make a Bash version of the script to use it in other OS.
 
 ## Built With
 
@@ -45,3 +53,8 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 This script idea has born during a work for Belgian Rails company. We were faced with the need to create and modify Helm charts for dozens of microservices being migrated to our Kubernetes cluster.
 Just another good example of laziness inspiring people XD
+
+### TODO
+
+- Make the script more "generic". Still contains lots of conventions that can/should be replaced by parameters.
+- Make a Bash version of the script to use it in other OS.
