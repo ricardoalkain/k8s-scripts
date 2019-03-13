@@ -11,6 +11,8 @@ param(
     [string] $mincpu,       # Require this free CPU to schedule pod in a node
     [string] $minmem,       # Require this free memory to schedule pod in a node
     [string] $url,          # External URL template
+    [switch] $http,         # Configures service for HTTP access (if omitted, configures HTTPS)
+    [string] $certificate,  # Certificate name (as installed in F5 partition)
 
     [alias("v")]
     [switch] $verbose,      # Outputs all created/modified files content
@@ -28,7 +30,6 @@ $ErrorActionPreference = "Stop"
 $jenkins_version    = "{JENKINS_VERSION}"
 $docker_registry    = "docker-registry.intern-belgianrail.be:9999"
 $docker_feed        = ""
-$proget_feed        = $docker_feed
 $kafka_group_suffix = '-k8s'
 $secret_db_user     = 'DB_USER'
 $secret_db_pwd      = 'DB_PASSWORD'
@@ -43,13 +44,17 @@ $dns_tst_ip      = "10.251.149.21"
 $dns_acc_ip      = "10.251.149.22"
 $dns_prd_ip      = "10.251.149.23"
 
+$f5_dev_part     = "K8s"
+$f5_tst_part     = "K8s"
+$f5_acc_part     = "K8s-acc"
+$f5_prd_part     = "K8s"
+
 $default_port       = 80
 
 $unknown            = '??????'
 
 # Default values
 $dotnet_image = 'aspnetcore@sha256:5f964756fae50873c496915ad952b0f15df8ef985e4ac031d00b7ac0786162d0' #default
-$dotnet_version = '2.0'
 
 $probe_live_url     = '/info'
 $probe_live_period  = 10
@@ -62,13 +67,13 @@ $probe_ready_retries= 3
 
 $ext_url_template   = "ri-{ALIAS}.api.{ENV}-intern-belgianrail.be"
 
+if (!$certificate) { $certificate = "/Common/clientssl" }
+
 # The const bellow is used to highlight temporary/experimental blocks in conversion script
 # As soon as the changes are not needed anymore or they become permanent, it's easier to search
 # for it and locate the blocks to be modified or removed. Changing its value to 0 also easily
 # disable all those blocks at once.
 $xp_blocks          = $false #(-not $stable)
-
-
 
 if ($liveness) {
     $liveness = $liveness.Split(',')
@@ -117,6 +122,8 @@ if ($help) # Sorry MS, but Get-Help method sucks...
     Write-Host '-mincpu         Require this free CPU to schedule pod in a node. This can avoid pod from being started.'
     Write-Host '-minmem         Require this free memory to schedule pod in a node. This can avoid pod from being started.'
     Write-Host "-url, -u        External URL. Inform service alias only of full URL with {ENV} as placeholder for environment code. Ex: $ext_url_template"
+    Write-Host "-http           Indicates that service is to be configured for HTTP access (configures HTTPS if omitted)"
+    Write-Host "-certificate    Certificate name (as installed in F5 partition)"
 
     Write-Host '-minikube       Prepare the application to deploy in local Kubernetes cluster (Minikube).'
     Write-Host '-verbose, -v    Show the content of all modified/created files.'
@@ -256,26 +263,37 @@ if ($null -eq $main_proj)
 
 
 # Check main project .NET Core version
-$content = $(Get-Content "csproj.shared.props" -Raw)
-if ($content -match "<TargetFramework>netcoreapp(.*?)<")
-{
-    if ($Matches[1] -ne $dotnet_version)
-    {
-        $dotnet_version = $Matches[1]
-        if ($dotnet_version -le 2.0) {
-            $dotnet_image = "aspnetcore:"
+$dotnet_version = $false
+
+$content = $(Get-Content $main_proj.FullName -Raw)
+if ($content -match "<TargetFramework>netcoreapp(.*?)<") {
+    $dotnet_version = $Matches[1]
+}
+else {
+    # If TargetFramework is not found, look for an imported csproj
+    if ($content -match '<Import Project="(.*?)"') {
+        $file = $main_proj.Directory.FullName + "\" + $Matches[1]
+        $content = $(Get-Content $file -Raw)
+        if ($content -match "<TargetFramework>netcoreapp(.*?)<") {
+            $dotnet_version = $Matches[1]
         }
-        else {
-            $dotnet_image = "dotnet:"
-        }
-        $dotnet_image += "$dotnet_version-aspnetcore-runtime"
     }
 }
-else
-{
+
+if (!$dotnet_version) {
     Write-Error "$($main_proj.BaseName) does not seem to be a valid .NET Core project: expected <TargetFramework>netcoreappXXX</TargetFramework>."
     Exit;
 }
+else {
+    if ($dotnet_version -le 2.0) {
+        $dotnet_image = "aspnetcore:"
+    }
+    else {
+        $dotnet_image = "dotnet:"
+    }
+    $dotnet_image += "$dotnet_version-aspnetcore-runtime"
+}
+
 
 $docker_repo, $docker_img = $helm_project.Split('-')
 $docker_img_full = ''
@@ -434,9 +452,9 @@ Write-Host "+$probe_ready_url delay=${probe_ready_delay}s timeout=${probe_ready_
 Write-Host 'Liveness Probe:        ' -NoNewline
 Write-Host "+$probe_live_url period=${probe_live_period}s timeout=${probe_live_timeout}s retries=${probe_live_retries}" -ForegroundColor Yellow
 Write-Host 'Resource Limits:       ' -NoNewline
-Write-Host "cpu=${maxcpu} memory=${maxmem}}" -ForegroundColor Yellow
+Write-Host "cpu=${maxcpu} memory=${maxmem}" -ForegroundColor Yellow
 Write-Host 'Resource Requirements: ' -NoNewline
-Write-Host "cpu=${mincpu} memory=${minmem}}" -ForegroundColor Yellow
+Write-Host "cpu=${mincpu} memory=${minmem}" -ForegroundColor Yellow
 Write-Host 'External URL:          ' -NoNewline
 Write-Host $ext_url_template -ForegroundColor Yellow
 
@@ -529,15 +547,32 @@ $content = (Get-Content $file -Raw) `
     -replace '  port: 80',"  port: $port" `
 
 if (!$minikube) {
+    $annotations = ("annotations:`r`n" +
+                    "  kubernetes.io/ingress.class: `"f5`"`r`n" +
+                    "  virtual-server.f5.com/http-port: ")
+
+    if ($http) {
+        $annotations += '80'
+    }
+    else {
+        $annotations += ("443`r`n" +
+            "  ingress.kubernetes.io/ssl-redirect: `"true`"`r`n" +
+            "  ingress.kubernetes.io/allow-http: `"true`"")
+    }
+
     $content = $content `
         -replace '  type: ClusterIP','  type: NodePort' `
         -replace 'replicaCount: 1','replicaCount: 2' `
         -replace 'enabled: false','enabled: true' `
-        -replace 'annotations: {}', 'annotations:
-    kubernetes.io/ingress.class: "f5"
-    virtual-server.f5.com/http-port: "80"
-    virtual-server.f5.com/partition: "K8s"' `
+        -replace 'annotations: {}', $annotations `
         -replace 'hosts:[\s\S]*?local', 'hosts: []'
+}
+
+if (!$http) {
+    $content = $content -replace 'tls:[\s\S]*?\n\n', (
+    "  tls:`r`n" + `
+    "    - secretName: `"$certificate`"`r`n" +
+    "  #    hosts: []`r`n`r`n")
 }
 
 $resources = ""
@@ -820,21 +855,26 @@ foreach($file in $files_found)
                 "acceptance"    {
                     $ingress_host_ip = $dns_acc_ip
                     $env_code = "acc"
+                    $f5_partition = $f5_acc_part
                 }
                 "development"    {
                     $ingress_host_ip = $dns_dev_ip
                     $env_code = "dev"
+                    $f5_partition = $f5_dev_part
                 }
                 "production"    {
                     $ingress_host_ip = $dns_prd_ip
                     $env_code = ""
+                    $f5_partition = $f5_prd_part
                 }
                 "test"    {
                     $ingress_host_ip = $dns_tst_ip
                     $env_code = "tst"
+                    $f5_partition = $f5_tst_part
                 }
                 Default         {
-                    $unknown
+                    $ingress_host_ip = $unknown
+                    $env_code = $unknown
                 }
             }
 
@@ -855,6 +895,7 @@ foreach($file in $files_found)
                         "  namespace: rivdec-$file_env_lower`r`n" +
                         "  annotations: `r`n" +
                         "    virtual-server.f5.com/ip: `"$ingress_host_ip`"`r`n" +
+                        "    virtual-server.f5.com/partition: `"$f5_partition`"`r`n" +
                         "  hosts: `r`n" +
                         "    - $ingress_host_name`r`n")
 
