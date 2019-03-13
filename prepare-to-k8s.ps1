@@ -376,7 +376,7 @@ $content = (Get-Content $file -Raw) `
     -replace '  port: 80',"  port: $port" `
 
 if (!$minikube) {
-    $content = (Get-Content $file -Raw) `
+    $content = $content `
         -replace '  type: ClusterIP','  type: NodePort' `
         -replace 'replicaCount: 1','replicaCount: 2' `
 		-replace 'enabled: false','enabled: true' `
@@ -454,7 +454,7 @@ $yaml_deploy_pos_res
 
 # Set probes
 $content = $content `
-    -replace '(ports:[\s\S]*?containerPort:\s*?).*',$('$1';$port) `
+    -replace '(ports:[\s\S]*?containerPort:\s*?).*',$('$1','{{ .Values.service.port }}') `
     -replace '(livenessProbe:\s*?httpGet:\s*?path:\s*?).*',$('$1';$probe_live) `
     -replace '(readinessProbe:\s*?httpGet:\s*?path:\s*?).*',$('$1';$probe_ready)
 
@@ -467,9 +467,12 @@ if ($verbose) { Write-Host $content -ForegroundColor DarkGray }
 $file = "$helm_dir\templates\ingress.yaml"
 $content = $(Get-Content $file -Raw)
 
+$ingressPortExpression = '{{- $ingressPort := .Values.service.port -}}'
+
 $content = $content `
+	-replace "apiVersion","$ingressPortExpression`r`napiVersion" `
 	-replace 'path:[\s\S]*?backend:','backend:' `
-	-replace 'servicePort: http','servicePort: 80'
+	-replace 'servicePort: http','servicePort: {{ $ingressPort }}'
 
 if ($content -match '([\s\S]*?)((.*)name:[\s\S]*)')
 {
